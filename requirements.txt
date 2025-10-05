@@ -1,0 +1,23 @@
+# Web Framework
+Flask
+python-dotenv
+
+# Database & Drivers
+SQLAlchemy
+PyMySQL         # for MySQL
+psycopg2-binary # for PostgreSQL
+pyodbc          # for MSSQL
+pandas          # for CSV file handling
+
+# AI & Vector DB
+vanna
+ollama
+chromadb
+langchain
+langchain-community
+
+# Knowledge Graph
+
+
+# Utilities
+langchain-experimental # May be useful for graph integrations

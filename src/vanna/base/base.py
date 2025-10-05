@@ -696,7 +696,7 @@ class VannaBase(ABC):
         response = self.submit_prompt(
             [
                 self.system_message(
-                    "The user will give you SQL and you will try to guess what the business question this query is answering. Return just the question without any additional explanation. Do not reference the table name in the question."
+                    "The user will give you SQL and you will try to guess what the business question this query is answering. Return just the question without any additional explanation. Do not reference the table name in the question. Please respond in Traditional Chinese."
                 ),
                 self.user_message(sql),
             ],
@@ -1826,17 +1826,14 @@ class VannaBase(ABC):
             raise ValidationError("Please also provide a SQL query")
 
         if documentation:
-            print("Adding documentation....")
             return self.add_documentation(documentation)
 
         if sql:
             if question is None:
                 question = self.generate_question(sql)
-                print("Question generated with sql:", question, "\nAdding SQL...")
             return self.add_question_sql(question=question, sql=sql)
 
         if ddl:
-            print("Adding ddl:", ddl)
             return self.add_ddl(ddl)
 
         if plan:

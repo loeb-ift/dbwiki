@@ -91,6 +91,18 @@ class Ollama(VannaBase):
       f"model={self.model},\n"
       f"options={self.ollama_options},\n"
       f"keep_alive={self.keep_alive}")
+    
+    # 确保所有消息的content字段都是字符串类型
+    if isinstance(prompt, list):
+        for i, message in enumerate(prompt):
+            if isinstance(message, dict) and 'content' in message:
+                if isinstance(message['content'], list):
+                    # 如果content是列表，将其转换为字符串
+                    prompt[i]['content'] = "".join(str(item) for item in message['content'])
+                elif not isinstance(message['content'], str):
+                    # 如果content不是字符串，将其转换为字符串
+                    prompt[i]['content'] = str(message['content'])
+    
     self.log(f"Prompt Content:\n{json.dumps(prompt, ensure_ascii=False)}")
     response_dict = self.ollama_client.chat(model=self.model,
                                             messages=prompt,
@@ -99,5 +111,14 @@ class Ollama(VannaBase):
                                             keep_alive=self.keep_alive)
 
     self.log(f"Ollama Response:\n{str(response_dict)}")
-
-    return response_dict['message']['content']
+    
+    # 确保content始终是字符串类型
+    content = response_dict['message']['content']
+    if isinstance(content, list):
+        # 如果content是列表，将其转换为字符串
+        content = "".join(str(item) for item in content)
+    elif not isinstance(content, str):
+        # 如果content不是字符串，将其转换为字符串
+        content = str(content)
+    
+    return content

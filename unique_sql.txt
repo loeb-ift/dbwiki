@@ -1,0 +1,881 @@
+
+FOR Mistral,
+    config must be provided WITH an api_key
+AND model---SQL_SEPARATOR---
+"
+DELETE
+FROM langchain_pg_embedding
+WHERE cmetadata ->> ? = :id---SQL_SEPARATOR---
+"
+DELETE
+FROM langchain_pg_embedding
+WHERE cmetadata->>? LIKE ?---SQL_SEPARATOR---
+"
+DELETE
+FROM oracle_embedding
+WHERE collection_id =
+    (SELECT UUID
+     FROM oracle_collection
+     WHERE name = :1)---SQL_SEPARATOR---
+"
+INSERT INTO oracle_collection(name, cmetadata, UUID)
+VALUES (:1, :2, :3)---SQL_SEPARATOR---
+"
+UPDATE an EXISTING SQL FUNCTION based ON the provided parameters. Args: old_function_name (STR): The CURRENT name OF the FUNCTION TO be updated. updated_function (dict): A DICTIONARY containing the updated FUNCTION details. Expected keys: - ?: The NEW name OF the function. - ?: The NEW description OF the function. - ?: A list OF dictionaries describing the FUNCTION arguments. - ?: The NEW SQL TEMPLATE
+FOR the function. - ?: The NEW post-processing code template. RETURNS: bool: TRUE IF the FUNCTION was successfully updated,
+                                                                                                                                                 FALSE otherwise.---SQL_SEPARATOR---
+"
+UPDATE oracle_embedding
+SET embedding = TO_VECTOR(:1),
+    document = JSON_MERGEPATCH(document, :2)
+WHERE UUID = :3---SQL_SEPARATOR---
+" # Regular expression to find 'select' (ignoring case) and capture until ';', '```', or end of string
+ pattern = re.compile(r---SQL_SEPARATOR---
+" ) # Connect to the database and execute the delete statement
+ WITH engine.connect() AS CONNECTION: # Start a transaction
+ WITH connection.begin() AS TRANSACTION: try: RESULT = connection.execute(delete_statement, {---SQL_SEPARATOR---
+" ) # Execute the deletion within a transaction block
+ WITH engine.connect() AS CONNECTION: WITH connection.begin() AS TRANSACTION: try: RESULT = connection.execute(query) transaction.commit() # Explicitly commit the transaction
+ IF result.rowcount > ?: logging.info( f---SQL_SEPARATOR---
+" SQLFunctionUpdate = { ?,
+                        ?,
+                        ?,
+                        ?,
+                        ? } # Define the expected keys for each argument in the arguments list
+ ArgumentKeys = {?,
+                 ?,
+                 ?,
+                 ?,
+                 ?} # Function to validate and transform arguments
+ def validate_arguments(args): RETURN [ {KEY: arg[KEY]
+FOR KEY IN arg IF KEY IN ArgumentKeys}
+FOR arg IN args ] # Keep only the keys that conform to the SQLFunctionUpdate GraphQL input type
+ updated_function = {KEY: value
+FOR KEY,
+    value IN updated_function.items() IF KEY IN SQLFunctionUpdate} # Special handling for 'arguments' to ensure they conform to the spec
+ IF ? IN updated_function: updated_function[?] = validate_arguments(updated_function[?]) variables = {---SQL_SEPARATOR---
+" This FUNCTION can
+RESET the collection TO empty state. Args: collection_name (STR): SQL
+OR ddl
+OR documentation RETURNS: bool: TRUE IF collection IS deleted,
+                                                      FALSE otherwise---SQL_SEPARATOR---
+" mutation DeleteSQLFunction($function_name: String!) { delete_sql_function(function_name: $function_name) }---SQL_SEPARATOR---
+", [
+        self.generate_embedding(update_content),
+        update_json,
+        id
+      ] ) self.oracle_conn.commit() cursor.close() RETURN TRUE @staticmethod def _extract_documents(query_results) -> list:---SQL_SEPARATOR---
+", [id]) self.oracle_conn.commit() cursor.close() RETURN TRUE def update_training_data(SELF, id: STR, train_type: STR, question: STR, **kwargs) -> bool: print(f---SQL_SEPARATOR---
+# Nomenclature
+ | PREFIX | Definition | Examples | | --- | --- | --- |
+| `vn.get_` | FETCH SOME DATA | [`vn.get_related_ddl(...)`][vanna.base.base.VannaBase.get_related_ddl] | | `vn.add_` | Adds something TO the retrieval LAYER | [`vn.add_question_sql(...)`][vanna.base.base.VannaBase.add_question_sql] <br> [`vn.add_ddl(...)`][vanna.base.base.VannaBase.add_ddl] | | `vn.generate_` | Generates something USING AI based ON the information IN the model | [`vn.generate_sql(...)`][vanna.base.base.VannaBase.generate_sql] <br> [`vn.generate_explanation()`][vanna.base.base.VannaBase.generate_explanation] | | `vn.run_` | Runs code (SQL) | [`vn.run_sql`][vanna.base.base.VannaBase.run_sql] | | `vn.remove_` | Removes something
+FROM the retrieval LAYER | [`vn.remove_training_data`][vanna.base.base.VannaBase.remove_training_data] | | `vn.connect_` | Connects TO a DATABASE | [`vn.connect_to_snowflake(...)`][vanna.base.base.VannaBase.connect_to_snowflake] | | `vn.update_` | Updates something | N/A -- unused |
+| `vn.set_` |
+SETS something | N/A -- unused  |
+ # Open-Source and Extending
+ Vanna.AI IS OPEN-SOURCE
+AND extensible. IF you?intermediate_sql?s the SQL query IN a code BLOCK: ```sql\nSELECT * FROM customers\n```") ``` Extracts the SQL query
+FROM the LLM response. This IS useful IN CASE the LLM response CONTAINS other information besides the SQL query. Override this FUNCTION IF your LLM responses need custom extraction logic. Args: llm_response (STR): The LLM response. RETURNS: STR: The extracted SQL query.---SQL_SEPARATOR---
+) RETURN select_with.group(?) ELSE: RETURN llm_response def submit_prompt(SELF, prompt, **kwargs) -> STR: self.log( f---SQL_SEPARATOR---
+) RETURN sql.group(?).replace(?, ?) elif select_with: self.log( f---SQL_SEPARATOR---
+) def create_model(SELF, model: STR, **kwargs) -> bool: ?my_model? model = sanitize_model_name(model) params = [NewOrganization(org_name=model, db_type="")] d = self._rpc_call(METHOD=?, params=params) IF ? NOT IN d: RETURN FALSE status = Status(**d[?]) RETURN status.success def get_models(SELF) -> list: ? d = self._rpc_call(METHOD=?, params=[]) IF ? NOT IN d: RETURN [] orgs = OrganizationList(**d[?]) RETURN orgs.organizations def generate_embedding(SELF, DATA: STR, **kwargs) -> list[float]: # This is done server-side
+ pass def add_question_sql(SELF, question: STR, SQL: STR, **kwargs) -> STR: IF ? IN kwargs: tag = kwargs[?] ELSE: tag = ? params = [QuestionSQLPair(question=question, sql=sql, tag=tag)] d = self._rpc_call(METHOD=?, params=params) IF ? NOT IN d: RAISE Exception(?, d) status = StatusWithId(**d[---SQL_SEPARATOR---
+) def delete_function(SELF, function_name: STR) -> bool: mutation =---SQL_SEPARATOR---
+) self.ddl_collection = self.chroma_client.get_or_create_collection(name=?, embedding_function=self.embedding_function) RETURN TRUE elif collection_name == ?: self.chroma_client.delete_collection(name=---SQL_SEPARATOR---
+) self.sql_collection = self.chroma_client.get_or_create_collection(name=?, embedding_function=self.embedding_function) RETURN TRUE elif collection_name == ?: self.chroma_client.delete_collection(name=---SQL_SEPARATOR---
+) transaction.rollback() RETURN FALSE def remove_collection(SELF, collection_name: STR) -> bool: ENGINE = create_engine(self.connection_string) # Determine the suffix to look for based on the collection name
+ suffix_map = {?: ?,
+                      ?: ?,
+                             ?: ?} suffix = suffix_map.get(collection_name) IF NOT suffix: logging.info(?) RETURN FALSE # SQL query to delete rows based on the condition
+ query = text( f---SQL_SEPARATOR---
+) update_content = kwargs[---SQL_SEPARATOR---
+)) def get_similar_question_sql(SELF, question: STR, **kwargs) -> list: results = self._client.query_points(self.sql_collection_name, query=self.generate_embedding(question),
+                                                                                                            LIMIT=self.n_results, with_payload=TRUE,).points RETURN [dict(result.payload) for result in results] def get_related_ddl(SELF, question: STR, **kwargs) -> list: results = self._client.query_points(self.ddl_collection_name, query=self.generate_embedding(question),
+                                                                                                                                                                                                                                                                                                                 LIMIT=self.n_results, with_payload=TRUE,).points RETURN [result.payload[---SQL_SEPARATOR---
+): RETURN self.ddl_store.delete(ids=[id], **kwargs) elif id.endswith(---SQL_SEPARATOR---
+): RETURN self.documentation_store.delete(ids=[id], **kwargs) ELSE: RETURN FALSE
+EXCEPT
+EXCEPTION AS e: self.log(f---SQL_SEPARATOR---
+): RETURN self.sql_store.delete(ids=[id], **kwargs) elif id.endswith(---SQL_SEPARATOR---
+): id = id.replace(?, ?) success = self.weaviate_client.collections.get(self.training_data_cluster[?]).data.delete_by_id(id) elif id.endswith(---SQL_SEPARATOR---
+): self.Index.delete(ids=[id], namespace=self.ddl_namespace) RETURN TRUE elif id.endswith(---SQL_SEPARATOR---
+): self.Index.delete(ids=[id], namespace=self.sql_namespace) RETURN TRUE elif id.endswith(---SQL_SEPARATOR---
+): self.ddl_collection.delete(ids=id) RETURN TRUE elif id.endswith(---SQL_SEPARATOR---
+): self.documentation_collection.delete(ids=id) RETURN TRUE ELSE: RETURN FALSE def remove_collection(SELF, collection_name: STR) -> bool:---SQL_SEPARATOR---
+): self.milvus_client.delete(collection_name=---SQL_SEPARATOR---
+): self.mq.index(?).delete_documents(ids=[id]) RETURN TRUE ELSE: RETURN FALSE # Static method to extract the documents from the results of a query
+ @staticmethod def _extract_documents(DATA) -> list: # Check if 'hits' key is in the dictionary and if it's a list
+ IF---SQL_SEPARATOR---
+): self.mq.index(?).delete_documents(ids=[id]) RETURN TRUE elif id.endswith(---SQL_SEPARATOR---
+): self.sql_collection.delete(ids=id) RETURN TRUE elif id.endswith(---SQL_SEPARATOR---
+**Example** ```python
+vn.run_sql = lambda sql: pd.read_sql(sql, engine)
+```
+SET the SQL TO DataFrame FUNCTION
+FOR Vanna.AI. This IS used IN the [`vn.ask(...)`][vanna.ask] function. INSTEAD OF setting this directly you can also USE [`vn.connect_to_snowflake(...)`][vanna.connect_to_snowflake] TO
+SET this. ?https://ask.vanna.ai/unauthenticated_rpc? Please SWITCH TO the FOLLOWING METHOD
+FOR initializing Vanna:
+FROM vanna.remote import VannaDefault api_key = # Your API key from https://vanna.ai/account/profile
+vanna_model_name = # Your model name from https://vanna.ai/account/profile
+ vn = VannaDefault(model=vanna_model_name, api_key=api_key) ?Content-TYPE?application/JSON?METHOD?params? **Example:** ```python
+    vn.get_api_key(email="my-email@example.com")
+    ``` Login TO the Vanna.AI API. Args: email (STR): The email address TO login with. otp_code (
+                                                                                                 UNION[STR, NONE]): The OTP code TO login with. IF NONE,
+                                                                                                                                                   an OTP code will be sent TO the email address. RETURNS: STR: The API key. ?VANNA_API_KEY?my-email@example.com?Please
+REPLACE ? WITH your email address.?send_otp?RESULT?Error sending OTP code.?RESULT?Error sending OTP code: {status.message}?CHECK your email
+FOR the code
+AND enter it here: ?verify_otp?RESULT?Error verifying OTP code.?RESULT?Error verifying OTP code.?Manually Trained?Train ON SQL: {self.item_group} {self.item_name}?Train ON DDL: {self.item_group} {self.item_name}?Train ON Information SCHEMA: {self.item_group} {self.item_name}?SQL?ddl?IS" CLASS TrainingPlan:---SQL_SEPARATOR---
+, ?,
+  ?], filter=f? ) ) IF len(df): # Check if there is similar query and the result is not empty
+ RESULT = [ast.literal_eval(element)
+FOR element IN df[?].tolist()] RETURN RESULT def get_training_data(SELF) -> List[STR]: SEARCH = self.search_client.search( search_text=?,
+SELECT=['id', 'document', 'type'],
+       filter=f---SQL_SEPARATOR---
+, ?,
+  ?], filter=f? ) ) IF len(df): RESULT = df[?].tolist() RETURN RESULT def get_related_documentation(SELF, text: STR) -> List[STR]: RESULT = [] vector_query = VectorizedQuery(vector=self.generate_embedding(text), fields=?) df = pd.DataFrame( self.search_client.search( top=self.n_results_documentation,
+                                                                                                                                                                                                                                                                                                                        vector_queries=[vector_query],
+SELECT=[---SQL_SEPARATOR---
+, ?,
+  ?], filter=f?,
+           vector_filter_mode=VectorFilterMode.PRE_FILTER ) ) IF len(df): RESULT = df[?].tolist() RETURN RESULT def get_similar_question_sql(SELF, question: STR) -> List[STR]: RESULT = [] # Vectorize the text
+ vector_query = VectorizedQuery(vector=self.generate_embedding(question), fields=?) df = pd.DataFrame( self.search_client.search( top=self.n_results_sql,
+                                                                                                                                                  vector_queries=[vector_query],
+SELECT=[---SQL_SEPARATOR---
+, ?] ).columns.tolist() # Decision-making for plot type
+ IF len(numeric_cols) >= ?: # Use the first two numeric columns for a scatter plot
+ fig = px.scatter(df, x=numeric_cols[?], y=numeric_cols[?]) elif len(numeric_cols) == ?
+AND len(categorical_cols) >= ?: # Use a bar plot if there's one numeric and one categorical column
+ fig = px.bar(df, x=categorical_cols[?], y=numeric_cols[?]) elif len(categorical_cols) >= ?
+AND df[categorical_cols[?]].nunique() < ?: # Use a pie chart for categorical data with fewer unique values
+ fig = px.pie(df, NAMES=categorical_cols[?]) ELSE: # Default to a simple line plot if above conditions are not met
+ fig = px.line(df) IF fig IS NONE: RETURN NONE IF dark_mode: fig.update_layout(TEMPLATE=---SQL_SEPARATOR---
+, DATA={ ?: _id,
+               ?: ddl,
+                      ?: embedding } ) RETURN _id def add_documentation(SELF, documentation: STR, **kwargs) -> STR: IF len(documentation) == ?: RAISE Exception(?) _id = str(uuid.uuid4()) + ? embedding = self.embedding_function.encode_documents([documentation])[?] self.milvus_client.insert( collection_name=---SQL_SEPARATOR---
+, DATA={ ?: _id,
+               ?: documentation,
+                      ?: embedding } ) RETURN _id def get_training_data(SELF, **kwargs) -> pd.DataFrame: sql_data = self.milvus_client.query(collection_name=?, output_fields=["*"],
+                                                                                                                                                    LIMIT=MAX_LIMIT_SIZE,) df = pd.DataFrame() df_sql = pd.DataFrame({ ?: [doc[?]
+                                                                                                                                                                                                                     FOR doc IN sql_data], ?: [doc[?]
+                                                                                                                                                                                                                     FOR doc IN sql_data], ?: [doc[?]
+                                                                                                                                                                                                                     FOR doc IN sql_data], }) df = pd.concat([df, df_sql]) ddl_data = self.milvus_client.query(collection_name=?, output_fields=["*"],
+                                                                                                                                                                                                                                                                                                               LIMIT=MAX_LIMIT_SIZE,) df_ddl = pd.DataFrame({ ?: [doc[?]
+                                                                                                                                                                                                                                                                                                                                                            FOR doc IN ddl_data], ?: [None for doc in ddl_data], ?: [doc[?]
+                                                                                                                                                                                                                                                                                                                                                            FOR doc IN ddl_data], }) df = pd.concat([df, df_ddl]) doc_data = self.milvus_client.query(collection_name=?, output_fields=["*"],
+                                                                                                                                                                                                                                                                                                                                                                                                                                                      LIMIT=MAX_LIMIT_SIZE,) df_doc = pd.DataFrame({ ?: [doc[?]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   FOR doc IN doc_data], ?: [None for doc in doc_data], ?: [doc[?]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   FOR doc IN doc_data], }) df = pd.concat([df, df_doc]) RETURN df def get_similar_question_sql(SELF, question: STR, **kwargs) -> list: search_params = { ?: ?,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ?: {?: ?}, } embeddings = self.embedding_function.encode_queries([question]) res = self.milvus_client.search(collection_name=?, anns_field=?, DATA=embeddings,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      LIMIT=self.n_results, output_fields=["text", "sql"], search_params=search_params) res = res[?] list_sql = []
+FOR doc IN res: dict = {} dict[?] = doc[?][?] dict[?] = doc[?][?] list_sql.append(dict) RETURN list_sql def get_related_ddl(SELF, question: STR, **kwargs) -> list: search_params = { ?: ?,
+                                                                                                                                                                                                                                         ?: {?: ?}, } embeddings = self.embedding_function.encode_queries([question]) res = self.milvus_client.search(collection_name=?, anns_field=?, DATA=embeddings,
+                                                                                                                                                                                                                                                                                                                                                                      LIMIT=self.n_results, output_fields=["ddl"], search_params=search_params) res = res[?] list_ddl = []
+FOR doc IN res: list_ddl.append(doc[?][?]) RETURN list_ddl def get_related_documentation(SELF, question: STR, **kwargs) -> list: search_params = { ?: ?,
+                                                                                                                                                                             ?: {?: ?}, } embeddings = self.embedding_function.encode_queries([question]) res = self.milvus_client.search(collection_name=?, anns_field=?, DATA=embeddings,
+                                                                                                                                                                                                                                                                                                          LIMIT=self.n_results, output_fields=["doc"], search_params=search_params) res = res[?] list_doc = []
+FOR doc IN res: list_doc.append(doc[?][?]) RETURN list_doc def remove_training_data(SELF, id: STR, **kwargs) -> bool: IF id.endswith(---SQL_SEPARATOR---
+, DATA={ ?: _id,
+               ?: question,
+                       ?: SQL,
+                              ?: embedding } ) RETURN _id def add_ddl(SELF, ddl: STR, **kwargs) -> STR: IF len(ddl) == ?: RAISE Exception(?) _id = str(uuid.uuid4()) + ? embedding = self.embedding_function.encode_documents([ddl])[?] self.milvus_client.insert( collection_name=---SQL_SEPARATOR---
+, FALSE) self.cmetadata = config.get(?, {?: ?}) ELSE: self.embedding_function = default_ef self.pre_delete_collection = FALSE self.cmetadata = {---SQL_SEPARATOR---
+, api_key=api_key, ) def generate_embedding(SELF, DATA: STR, **kwargs) -> list[float]: IF NOT DATA: RAISE ValueError(?) # Use model from kwargs, config, or default
+ model = kwargs.get(?, self.model) IF self.config IS NOT NONE
+AND ? IN self.config
+AND model == self.model: model = self.config[?] try: embedding = self.client.embeddings.create(model=model, INPUT=DATA, encoding_format=?, # Ensure we get float values
+) # Check if response has expected structure
+ IF NOT embedding
+OR NOT hasattr(embedding, ?)
+OR NOT embedding.data: RAISE ValueError(?) IF NOT embedding.data[?]
+OR NOT hasattr(embedding.data[?], ?): RAISE ValueError(?) IF NOT embedding.data[?].embedding: RAISE ValueError(?) RETURN embedding.data[?].embedding
+EXCEPT
+EXCEPTION AS e: # Log the error and raise a more informative exception
+ error_msg = f"Error generating embedding WITH Cohere: {str(e)}---SQL_SEPARATOR---
+, ids=[id]) RETURN TRUE elif id.endswith(---SQL_SEPARATOR---
+, llm_response,
+  re.DOTALL | re.IGNORECASE) IF sqls: SQL = sqls[?] self.log(title=?, message=f?) RETURN SQL # Match SELECT ... ;
+ sqls = re.findall(r---SQL_SEPARATOR---
+, llm_response,
+  re.DOTALL | re.IGNORECASE) IF sqls: SQL = sqls[?] self.log(title=?, message=f?) RETURN SQL # Match ```sql ... ``` blocks
+ sqls = re.findall(r?, llm_response, re.DOTALL | re.IGNORECASE) IF sqls: SQL = sqls[?].strip() self.log(title=?, message=f?) RETURN SQL # Match any ``` ... ``` code blocks
+ sqls = re.findall(r?, llm_response, re.DOTALL | re.IGNORECASE) IF sqls: SQL = sqls[?].strip() self.log(title=?, message=f?) RETURN SQL RETURN llm_response def is_sql_valid(SELF, SQL: STR) -> bool: ?
+SELECT *
+FROM customers---SQL_SEPARATOR---
+, re.IGNORECASE | re.DOTALL) MATCH = pattern.search(text) IF MATCH: # Remove three backticks from the matched string if they exist
+ RETURN match.group(?).replace(?, ?) ELSE: RETURN text def generate_sql(SELF, question: STR, **kwargs) -> STR: # Use the super generate_sql
+ SQL = super().generate_sql(question, **kwargs) # Replace "\_" with---SQL_SEPARATOR---
+, variables) response = requests.post(self._graphql_endpoint, headers=self._graphql_headers, JSON={?: mutation, ?: variables}) response_json = response.json() IF response.status_code == ?
+AND ? IN response_json
+AND response_json[?] IS NOT NONE
+AND ? IN response_json[?]: RETURN response_json[?][?] ELSE: RAISE Exception(f---SQL_SEPARATOR---
+./milvus.db?http://localhost:?? Vectorstore IMPLEMENTATION USING Milvus - https://milvus.io/docs/quickstart.md Args: - config (dict, optional): DICTIONARY OF `Milvus_VectorStore config` options. DEFAULTS TO `None`. - milvus_client: A `pymilvus.MilvusClient` instance. - embedding_function: A `milvus_model.base.BaseEmbeddingFunction` instance. DEFAULTS TO `DefaultEmbeddingFunction()`.
+FOR
+MORE models,
+     please refer TO: https://milvus.io/docs/embeddings.md ?milvus_client?milvus_client?embedding_function?embedding_function?foo?n_results?vannasql?vannaddl?vannadoc?id?text?SQL?vector?vector?vector?AUTOINDEX?L2?Strong?id?ddl?vector?vector?vector?AUTOINDEX?L2?Strong?id?doc?vector?vector?vector?AUTOINDEX?L2?Strong?pair OF question
+AND SQL can NOT be NULL?-SQL" embedding = self.embedding_function.encode_documents([question])[?] self.milvus_client.insert( collection_name=---SQL_SEPARATOR---
+: ?} self.oracle_conn = oracledb.connect(dsn=config.get(?)) self.oracle_conn.call_timeout = ? self.documentation_collection = ? self.ddl_collection = ? self.sql_collection = ? self.n_results = config.get(?, ?) self.n_results_ddl = config.get(?, self.n_results) self.n_results_sql = config.get(?, self.n_results) self.n_results_documentation = config.get(?, self.n_results) self.create_tables_if_not_exists() self.create_collections_if_not_exists(self.documentation_collection) self.create_collections_if_not_exists(self.ddl_collection) self.create_collections_if_not_exists(self.sql_collection) def generate_embedding(SELF, DATA: STR, **kwargs) -> List[float]: embeddings = self.embedding_function([data]) IF len(embeddings) == ?: RETURN list(embeddings[?].astype(float)) RETURN list(embeddings.astype(float)) def add_question_sql(SELF, question: STR, SQL: STR, **kwargs) -> STR: cmetadata = self.cmetadata.copy() collection = self.get_collection(self.sql_collection) question_sql_json = json.dumps({ ?: question, ?: SQL, }, ensure_ascii=FALSE,) id = str(uuid.uuid4()) embeddings = self.generate_embedding(question) custom_id = id + ?
+CURSOR = self.oracle_conn.cursor() cursor.setinputsizes(NONE, oracledb.DB_TYPE_VECTOR) cursor.execute( ?"
+INSERT INTO oracle_embedding (collection_id, embedding, document, cmetadata, custom_id, UUID)
+VALUES (:1, TO_VECTOR(:2), :3, :4, :5, :6)---SQL_SEPARATOR---
+: ?})[["question", "sql"]].to_dict(orient=?) def get_related_ddl(SELF, question: STR, **kwargs) -> list: df = self.fetch_similar_training_data(training_data_type=?, question=question, n_results=self.n_results_ddl) # Return a list of strings of the content
+ RETURN df[?].tolist() def get_related_documentation(SELF, question: STR, **kwargs) -> list: df = self.fetch_similar_training_data(training_data_type=?, question=question, n_results=self.n_results_documentation) # Return a list of strings of the content
+ RETURN df[?].tolist() def add_question_sql(SELF, question: STR, SQL: STR, **kwargs) -> STR: doc = { ?: question,
+                                                                                                                         ?: SQL } embedding = self.generate_embedding(str(doc)) RETURN self.store_training_data(training_data_type=?, question=question, content=SQL, embedding=embedding) def add_ddl(SELF, ddl: STR, **kwargs) -> STR: embedding = self.generate_embedding(ddl) RETURN self.store_training_data(training_data_type=?, question=?, content=ddl, embedding=embedding) def add_documentation(SELF, documentation: STR, **kwargs) -> STR: embedding = self.generate_embedding(documentation) RETURN self.store_training_data(training_data_type=?, question=?, content=documentation, embedding=embedding) def get_training_data(SELF, **kwargs) -> pd.DataFrame: query = f"
+SELECT id,
+       training_data_type,
+       question,
+       content
+FROM `{self.table_id}`---SQL_SEPARATOR---
+: NONE,
+  ?: update_content, } ) ELSE: update_json = json.dumps( {---SQL_SEPARATOR---
+: NONE,
+  ?: update_content, } ) elif train_type == ?: update_json = json.dumps( {---SQL_SEPARATOR---
+: SQL,
+  ?: question, } response = self._insert_data(?, data_object, self.generate_embedding(question)) RETURN f? def _query_collection(SELF, cluster_key: STR, vector_input: list, return_properties: list) -> list: self.weaviate_client.connect() collection = self.weaviate_client.collections.get(self.training_data_cluster[cluster_key]) response = collection.query.near_vector(near_vector=vector_input,
+                                                                                                                                                                                                                                                                                                                                                                                                                              LIMIT=self.n_results, return_properties=return_properties) response_list = [item.properties for item in response.objects] self.weaviate_client.close() RETURN response_list def get_related_ddl(SELF, question: STR, **kwargs) -> list: vector_input = self.generate_embedding(question) response_list = self._query_collection(?,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              vector_input, [---SQL_SEPARATOR---
+: ddl, } response = self._insert_data(?, data_object, self.generate_embedding(ddl)) RETURN f? def add_documentation(SELF, doc: STR, **kwargs) -> STR: data_object = {---SQL_SEPARATOR---
+: doc, } response = self._insert_data(?, data_object, self.generate_embedding(doc)) RETURN f? def add_question_sql(SELF, question: STR, SQL: STR, **kwargs) -> STR: data_object = {---SQL_SEPARATOR---
+: id,
+  ?: training_data_type,
+                        ?: question,
+                                    ?: content,
+                                               ?: embedding,
+                                                            ?: created_at.isoformat() }]) RETURN id def fetch_similar_training_data(SELF, training_data_type: STR, question: STR, n_results, **kwargs) -> pd.DataFrame: question_embedding = self.generate_question_embedding(question) query = f?"
+SELECT base.id AS id,
+       base.question AS question,
+       base.training_data_type AS training_data_type,
+       base.content AS content,
+       distance
+FROM VECTOR_SEARCH( TABLE `{self.table_id}`,
+                          ?,
+  (SELECT *
+   FROM UNNEST([STRUCT({question_embedding})])), top_k => ?,
+                                                 distance_type => ?,
+                                                 OPTIONS => '{{---SQL_SEPARATOR---
+: id}) # Commit the transaction if the delete was successful
+ transaction.commit() # Check if any row was deleted and return True or False accordingly
+ RETURN result.rowcount > ?
+EXCEPT
+EXCEPTION AS e: # Rollback the transaction in case of error
+ logging.error(f---SQL_SEPARATOR---
+: question,
+  ?: update_content, } )
+CURSOR = self.oracle_conn.cursor() cursor.setinputsizes(oracledb.DB_TYPE_VECTOR, oracledb.DB_TYPE_JSON) cursor.execute(---SQL_SEPARATOR---
+: question,
+  ?: update_content, } ) elif train_type == ?: update_json = json.dumps( {---SQL_SEPARATOR---
+: self.sql_namespace,
+  ?: self.ddl_namespace,
+         ?: self.documentation_namespace, }
+FOR data_type,
+    namespace IN namespaces.items(): DATA = self.Index.query(top_k=?, # max results that pinecone allows
+ namespace=namespace, include_values=TRUE, include_metadata=TRUE, vector=[0.0] * self.dimensions,) IF DATA IS NOT NONE: id_list = [MATCH[?]
+FOR MATCH IN DATA[?]] content_list = [ MATCH[?][data_type]
+FOR MATCH IN DATA[?] ] question_list = [ (json.loads(MATCH[?][data_type])[?] IF data_type == ? ELSE NONE)
+FOR MATCH IN DATA[?] ] df_data = pd.DataFrame({ ?: id_list, ?: question_list, ?: content_list, }) df_data[?] = data_type df = pd.concat([df, df_data]) RETURN df def remove_training_data(SELF, id: STR, **kwargs) -> bool: IF id.endswith(---SQL_SEPARATOR---
+: { ?: old_function_name,
+                         **updated_function } } print(---SQL_SEPARATOR---
+:true}}?{training_data_type}?embedding?embedding'] RETURN embeddings def generate_question_embedding(SELF, DATA: STR, **kwargs) -> List[float]: RESULT = self.get_embeddings(DATA, ?) IF RESULT != NONE: RETURN RESULT ELSE: RAISE ValueError(?) def generate_storage_embedding(SELF, DATA: STR, **kwargs) -> List[float]: RESULT = self.get_embeddings(DATA, ?) IF RESULT != NONE: RETURN RESULT ELSE: RAISE ValueError(?) # task = "RETRIEVAL_DOCUMENT"
+ # inputs = [TextEmbeddingInput(data, task)]
+ # embeddings = self.vertex_embedding_model.get_embeddings(inputs)
+  # if len(embeddings) == 0:
+ #     raise ValueError("No embeddings returned")
+  # return embeddings[0].values
+  RETURN RESULT def generate_embedding(SELF, DATA: STR, **kwargs) -> List[float]: RETURN self.generate_storage_embedding(DATA, **kwargs) def get_similar_question_sql(SELF, question: STR, **kwargs) -> list: df = self.fetch_similar_training_data(training_data_type=?, question=question, n_results=self.n_results_sql) # Return a list of dictionaries with only question, sql fields. The content field needs to be renamed to sql
+ RETURN df.rename(columns={---SQL_SEPARATOR---
+<!doctype html> <html lang=? TRANSLATE> <head> <meta
+CHARSET=? /> <LINK rel=? TYPE=? href=? /> <meta name=? content=? /> <LINK href=? rel=?> <script src=? TYPE=?></script> <title>Vanna.AI</title> <script TYPE=? crossorigin src=?></script> <LINK rel=? href=?> </head> <BODY CLASS=?> <div id=?></div> </BODY> </html> ?.nav-title{font-family:Roboto Slab,
+                                        serif}*,
+                                              :before,
+                                              :after{BOX-sizing:border-BOX;---SQL_SEPARATOR---
+?
+DELETE
+FROM oracle_collection
+WHERE name = :1---SQL_SEPARATOR---
+? AzureAISearch_VectorStore IS a CLASS that provides a vector store
+FOR Azure AI Search. Args: config (dict): Configuration dictionary. DEFAULTS TO {}. You must provide an API KEY IN the config. - azure_search_endpoint (STR, optional): Azure SEARCH endpoint. DEFAULTS TO ?. - azure_search_api_key (STR): Azure SEARCH API key. - dimensions (int, optional): Dimensions OF the embeddings. DEFAULTS TO ? which corresponds TO the dimensions OF BAAI/bge-small-en-v1?. - fastembed_model (STR, optional): Fastembed model TO use. DEFAULTS TO ?. - index_name (STR, optional): Name OF the index. DEFAULTS TO ?. - n_results (int, optional): Number OF results TO return. DEFAULTS TO ? - n_results_ddl (int, optional): Number OF results TO RETURN
+FOR DDL queries. DEFAULTS TO the value OF n_results. - n_results_sql (int, optional): Number OF results TO RETURN
+FOR SQL queries. DEFAULTS TO the value OF n_results. - n_results_documentation (int, optional): Number OF results TO RETURN
+FOR documentation queries. DEFAULTS TO the value OF n_results. Raises: ValueError: IF config IS NONE,
+OR IF ? IS NOT provided IN the config. ?config IS required,
+                           pass an API KEY,
+                                       ?,
+                                       IN the config.?azure_search_endpoint?https://azcognetive.search.windows.net?azure_search_api_key?dimensions?fastembed_model?BAAI/bge-small-en-v1??index_name?vanna-INDEX?n_results_ddl?n_results?n_results_sql?n_results?n_results_documentation?n_results?? IS required IN config TO USE AzureAISearch_VectorStore?id?document?TYPE?document_vector?ExhaustiveKnnProfile?ExhaustiveKnn?ExhaustiveKnnProfile?ExhaustiveKnn", ) ] ) INDEX = SearchIndex(name=self.index_name, fields=fields, vector_search=vector_search) RESULT = self.index_client.create_or_update_index(INDEX) print(f?) def _get_indexes(SELF) -> list: RETURN [index for index in self.index_client.list_index_names()] def add_ddl(SELF, ddl: STR) -> STR: id = deterministic_uuid(ddl) +---SQL_SEPARATOR---
+? IF collection_name IN self.id_suffixes.keys(): self._client.delete_collection(collection_name) self._setup_collections() RETURN TRUE ELSE: RETURN FALSE @cached_property def embeddings_dimension(SELF): RETURN len(self.generate_embedding(---SQL_SEPARATOR---
+? IF query_results IS NONE
+OR len(query_results) == ?: RETURN [] documents = [ json.loads(row_data[?]) IF isinstance(row_data[?], STR) ELSE row_data[?]
+FOR row_data IN query_results] RETURN documents def get_similar_question_sql(SELF, question: STR, **kwargs) -> list: embeddings = self.generate_embedding(question) collection = self.get_collection(self.sql_collection)
+CURSOR = self.oracle_conn.cursor() cursor.setinputsizes(NONE, oracledb.DB_TYPE_VECTOR, oracledb.DB_TYPE_VECTOR) cursor.execute( ?"
+SELECT document
+FROM oracle_embedding
+WHERE collection_id = :1
+ORDER BY VECTOR_DISTANCE(embedding, TO_VECTOR(:2), COSINE) FETCH FIRST :3 ROWS ONLY---SQL_SEPARATOR---
+? IF the provided context IS almost sufficient but requires knowledge OF a SPECIFIC string IN a particular COLUMN,
+                                                                                                            please generate an intermediate SQL query TO find the DISTINCT strings IN that column. Prepend the query WITH a COMMENT saying intermediate_sql \n---SQL_SEPARATOR---
+? IF the provided context IS insufficient,
+                              please EXPLAIN why it can?{question}': \n\n?Generate a list OF followup questions that the USER might ask about this data. Respond WITH a list OF questions,
+                                                                                                                       one per line. DO NOT answer WITH ANY explanations -- just the questions.---SQL_SEPARATOR---
+? Vectorstore USING PineconeDB Args: config (dict): Configuration dictionary. DEFAULTS TO {}. You must provide either a Pinecone Client
+OR an API KEY IN the config. - client (Pinecone, optional): Pinecone client. DEFAULTS TO None. - api_key (STR, optional): Pinecone API key. DEFAULTS TO None. - n_results (int, optional): Number OF results TO return. DEFAULTS TO ? - dimensions (int, optional): Dimensions OF the embeddings. DEFAULTS TO ? which coresponds TO the dimensions OF BAAI/bge-small-en-v1?. - fastembed_model (STR, optional): Fastembed model TO use. DEFAULTS TO ?. - documentation_namespace (STR, optional): Namespace
+FOR documentation. DEFAULTS TO ?. - distance_metric (STR, optional): Distance metric TO use. DEFAULTS TO ?. - ddl_namespace (STR, optional): Namespace
+FOR DDL. DEFAULTS TO ?. - sql_namespace (STR, optional): Namespace
+FOR SQL. DEFAULTS TO ?. - index_name (STR, optional): Name OF the index. DEFAULTS TO ?. - metadata_config (dict, optional): Metadata configuration IF USING a pinecone pod. DEFAULTS TO {}. - server_type (STR, optional): TYPE OF Pinecone server TO use. DEFAULTS TO ?. OPTIONS ARE ?
+OR ?. - podspec (PodSpec, optional): PodSpec configuration IF USING a pinecone pod. DEFAULTS TO PodSpec(environment=?, pod_type=?, metadata_config=self.metadata_config). - serverless_spec (ServerlessSpec, optional): ServerlessSpec configuration IF USING a pinecone serverless index. DEFAULTS TO ServerlessSpec(cloud=?, region=?). Raises: ValueError: IF config IS NONE,
+                                                                                                                                                                                                                                                                                                                                                                                                             api_key IS NOT provided
+OR client IS NOT provided,
+                 client IS NOT an INSTANCE OF Pinecone,
+OR server_type IS NOT ?
+OR ?. ?config IS required,
+                           pass either a Pinecone client
+OR an API KEY IN the config.?client?api_key?api_key IS required IN config
+OR pass a configured client?client must be an INSTANCE OF Pinecone?n_results?dimensions?fastembed_model?BAAI/bge-small-en-v1??documentation_namespace?documentation?distance_metric?cosine?ddl_namespace?ddl?sql_namespace?SQL?index_name?vanna-INDEX?metadata_config?server_type?serverless?serverless?pod?server_type must be either ?
+OR ??podspec?us-west??p1.x1?serverless_spec?aws?us-west??serverless?HOST?pod?HOST?HOST?name?-ddl?DDL WITH id: {id} already EXISTS IN the index. Skipping...---SQL_SEPARATOR---
+? mutation UpdateSQLFunction($input: SQLFunctionUpdate!) { update_sql_function(INPUT: $input) }---SQL_SEPARATOR---
+?Please also provide a SQL query?Adding documentation....?Question GENERATED WITH SQL:---SQL_SEPARATOR---
+?SQL": self.chroma_client.delete_collection(name=---SQL_SEPARATOR---
+?UUID?
+CREATE TABLE IF NOT EXISTS oracle_collection (name VARCHAR2(?) NOT NULL,
+                                                                 cmetadata JSON NOT NULL,
+                                                                                UUID VARCHAR2(?) NOT NULL,
+                                                                                                   CONSTRAINT oc_key_uuid PRIMARY KEY (UUID)) ?
+CREATE TABLE IF NOT EXISTS oracle_embedding (collection_id VARCHAR2(?) NOT NULL,
+                                                                         embedding vector NOT NULL,
+                                                                                          document JSON NOT NULL,
+                                                                                                        cmetadata JSON NOT NULL,
+                                                                                                                       custom_id VARCHAR2(?) NOT NULL,
+                                                                                                                                               UUID VARCHAR2(?) NOT NULL,
+                                                                                                                                                                  CONSTRAINT oe_key_uuid PRIMARY KEY (UUID)) ? GET
+OR
+CREATE a collection. RETURNS [Collection, bool]
+WHERE the bool IS TRUE IF the collection was created. ?" IF self.pre_delete_collection: self.delete_collection(name) created = FALSE collection = self.get_collection(name) IF collection: RETURN collection,
+                                                                                                                                                                                                   created cmetadata = json.dumps(self.cmetadata) IF cmetadata IS NONE ELSE json.dumps(cmetadata) collection_id = str(uuid.uuid4())
+  CURSOR = self.oracle_conn.cursor() cursor.execute(---SQL_SEPARATOR---
+?UUID?
+SELECT document
+FROM oracle_embedding
+WHERE collection_id = :1
+ORDER BY VECTOR_DISTANCE(embedding, TO_VECTOR(:2), COSINE) FETCH FIRST :top_k ROWS ONLY---SQL_SEPARATOR---
+?UUID?
+SELECT document
+FROM oracle_embedding
+WHERE collection_id = :1
+ORDER BY VECTOR_DISTANCE(embedding, TO_VECTOR(:2), DOT) FETCH FIRST :top_k ROWS ONLY---SQL_SEPARATOR---
+?UUID?
+SELECT document,
+       UUID
+FROM oracle_embedding
+WHERE collection_id = :1---SQL_SEPARATOR---
+?UUID?id?question?content?ddl?ddl?training_data_type?ddl?
+SELECT document,
+       UUID
+FROM oracle_embedding
+WHERE collection_id = :1---SQL_SEPARATOR---
+?UUID?id?question?content?documentation?documentation?training_data_type?documentation?
+DELETE
+FROM oracle_embedding
+WHERE UUID = :1---SQL_SEPARATOR---
+?UUID?id?question?question?question?content?SQL?SQL?training_data_type?SQL?
+SELECT document,
+       UUID
+FROM oracle_embedding
+WHERE collection_id = :1---SQL_SEPARATOR---
+?UUID?question?ddl?-ddl?
+INSERT INTO oracle_embedding (collection_id, embedding, document, cmetadata, custom_id, UUID)
+VALUES (:1, TO_VECTOR(:2), :3, :4, :5, :6)---SQL_SEPARATOR---
+?UUID?question?documentation?-doc?
+INSERT INTO oracle_embedding (collection_id, embedding, document, cmetadata, custom_id, UUID)
+VALUES (:1, TO_VECTOR(:2), :3, :4, :5, :6)---SQL_SEPARATOR---
+?Your goal IS TO combine a SEQUENCE OF questions INTO a singular question IF they ARE related. IF the SECOND question does NOT relate TO the FIRST question
+AND IS fully SELF-contained,
+                  RETURN the SECOND question. RETURN just the NEW combined question WITH NO additional explanations. The question should theoretically be answerable WITH a single SQL statement.---SQL_SEPARATOR---
+?\\_?_?\\?```sql\n((.|\n)*?)(?=;|\[|```)", llm_response,
+                                                       re.DOTALL) # Regular expression to find 'select, with (ignoring case) and capture until ';', [ (this happens in case of mistral) or end of string
+ select_with = re.search(r?, llm_response, re.IGNORECASE | re.DOTALL) IF SQL: self.log( f---SQL_SEPARATOR---
+?function_name": function_name} response = requests.post(self._graphql_endpoint, headers=self._graphql_headers, JSON={?: mutation, ?: variables}) response_json = response.json() IF response.status_code == ?
+AND ? IN response_json
+AND response_json[?] IS NOT NONE
+AND ? IN response_json[?]: RETURN response_json[?][?] ELSE: RAISE Exception(f---SQL_SEPARATOR---
+?name?cmetadata?UUID": ROW[?]} RETURN # type: ignore
+  def delete_collection(SELF, name) -> NONE: collection = self.get_collection(name) IF NOT collection: RETURN
+CURSOR = self.oracle_conn.cursor() cursor.execute(---SQL_SEPARATOR---
+?name?cmetadata?UUID?
+SELECT name,
+       cmetadata,
+       UUID
+FROM oracle_collection
+WHERE name = :1 FETCH FIRST ? ROWS ONLY---SQL_SEPARATOR---
+Briefly summarize the DATA based ON the question that was asked. DO NOT respond WITH ANY additional explanation beyond the summary.---SQL_SEPARATOR---
+Connected TO OpenSearch CLUSTER:?OpenSearch CLUSTER info:?Error connecting TO OpenSearch CLUSTER:?t exist self.create_index_if_not_exists(self.document_index, self.document_index_settings) self.create_index_if_not_exists(self.ddl_index, self.ddl_index_settings) self.create_index_if_not_exists(self.question_sql_index, self.question_sql_index_settings) def create_index(SELF):
+FOR INDEX IN [self.document_index, self.ddl_index,
+                  self.question_sql_index]: try: self.client.indices.create(INDEX)
+EXCEPT
+EXCEPTION AS e: print(?, e) print(f?) pass def create_index_if_not_exists(SELF, index_name: STR, index_settings: dict) -> bool: try: IF NOT self.client.indices.exists(index_name): print(f?) self.client.indices.create(INDEX=index_name, BODY=index_settings) RETURN TRUE ELSE: print(f?) RETURN FALSE
+EXCEPT
+EXCEPTION AS e: print(f?, e) RETURN FALSE def add_ddl(SELF, ddl: STR, **kwargs) -> STR: # Assuming that you have a DDL index in your OpenSearch
+ id = str(uuid.uuid4()) + ? ddl_dict = { ?: ddl } response = self.client.index(INDEX=self.ddl_index, BODY=ddl_dict, id=id, **kwargs) RETURN response[?] def add_documentation(SELF, doc: STR, **kwargs) -> STR: # Assuming you have a documentation index in your OpenSearch
+ id = str(uuid.uuid4()) + ? doc_dict = { ?: doc } response = self.client.index(INDEX=self.document_index, id=id, BODY=doc_dict, **kwargs) RETURN response[?] def add_question_sql(SELF, question: STR, SQL: STR, **kwargs) -> STR: # Assuming you have a Questions and SQL index in your OpenSearch
+ id = str(uuid.uuid4()) + ? question_sql_dict = { ?: question,
+                                                                   ?: SQL } response = self.client.index(INDEX=self.question_sql_index, BODY=question_sql_dict, id=id, **kwargs) RETURN response[?] def get_related_ddl(SELF, question: STR, **kwargs) -> List[STR]: # Assume you have some vector search mechanism associated with your data
+ query = { ?: { ?: { ?: question } } } print(query) response = self.client.search(INDEX=self.ddl_index, BODY=query, **kwargs) RETURN [hit[---SQL_SEPARATOR---
+DEFINE the interface
+FOR a CACHE that can be used TO store DATA IN a Flask app. ? Generate a UNIQUE ID
+FOR the cache. ? GET a value
+FROM the cache. ? GET ALL
+VALUES
+FROM the cache. ?
+SET a value IN the cache. ?
+DELETE a value
+FROM the cache. ?id?id?id?TYPE?error?error?NO id provided?TYPE?error?error?NO {field} FOUND?id?TYPE?not_logged_in?html? Expose a Flask API that can be used TO interact WITH a Vanna instance. Args: vn: The Vanna INSTANCE TO interact with. CACHE: The CACHE TO use. DEFAULTS TO MemoryCache,
+                                                                                                                                                                       which uses an IN-memory cache. You can also pass IN a custom CACHE that implements the CACHE interface. auth: The authentication METHOD TO use. DEFAULTS TO NoAuth,
+                                                                                                                                                                                                                                                                                                                                   which doesn?t support running websocket servers. Disabling debug mode.?Info?/api/v0/get_config?GET? GET the configuration
+FOR a USER ---
+ PARAMETERS: - name: USER IN: query responses: ?: SCHEMA: TYPE: OBJECT properties: TYPE: TYPE: string DEFAULT: config config: TYPE: OBJECT ?TYPE?config?config?/api/v0/generate_questions?GET? Generate questions ---
+ PARAMETERS: - name: USER IN: query responses: ?: SCHEMA: TYPE: OBJECT properties: TYPE: TYPE: string DEFAULT: question_list questions: TYPE: array items: TYPE: string header: TYPE: string DEFAULT: Here ARE SOME questions you can ask ?_model?chinook?TYPE?question_list?questions?What ARE the top ? artists BY sales??What ARE the total sales per YEAR BY country??Who IS the top selling artist IN EACH genre? SHOW the sales numbers.?How DO the employees rank IN terms OF sales performance??Which ? cities have the most customers??header?Here ARE SOME questions you can ask:?TYPE?error?error?NO training DATA found. Please ADD SOME training DATA first.?question?question?TYPE?question_list?questions?header?Here ARE SOME questions you can ask?TYPE?question_list?questions?header?GO---SQL_SEPARATOR---
+DELETE
+FROM `{self.table_id}`
+WHERE id = ?---SQL_SEPARATOR---
+ENGINE?model']}
+FOR {num_tokens} tokens (approx)?model?gpt?-turbo?6k?gpt?-turbo?USING model {model}
+FOR {num_tokens} tokens (approx)?text" IN choice: RETURN choice.text # If no response with text is found, return the first response---SQL_SEPARATOR---
+ENGINE?model']}
+FOR {num_tokens} tokens (approx)?model?qwen-long?qwen-plus?USING model {model}
+FOR {num_tokens} tokens (approx)?text" IN choice: RETURN choice.text # If no response with text is found, return the first response---SQL_SEPARATOR---
+Error?id?_id?training_data_type?question?content": content, }) # Get next batch of results, using documentation_store.client.scroll
+ response = opensearch_client.scroll(scroll_id=scroll_id, SCROLL=SCROLL) scroll_id = response.get(?) RETURN pd.DataFrame(DATA) def remove_training_data(SELF, id: STR, **kwargs) -> bool: try: IF id.endswith(---SQL_SEPARATOR---
+Example: ```python
+        vn.submit_prompt(
+            [
+                vn.system_message("The user will give you SQL and you will try to guess what the business question this query is answering. Return just the question without any additional explanation. Do not reference the table name in the question."),
+                vn.user_message("What are the top 10 customers by sales?"),
+            ]
+        )
+        ``` This METHOD IS used TO submit a prompt TO the LLM. Args: prompt (ANY): The prompt TO submit TO the LLM. RETURNS: STR: The response
+FROM the LLM. ?The USER will give you SQL
+AND you will try TO guess what the business question this query IS answering. RETURN just the question WITHOUT ANY additional explanation. DO NOT reference the TABLE name IN the question.?```[\w\s]*python\n([\s\S]*?)```|```([\s\S]*?)```?fig.show()?The FOLLOWING IS a pandas DataFrame that CONTAINS the results OF the query that answers the question the USER asked: ??The FOLLOWING IS a pandas DataFrame ?\n\nThe DataFrame was produced USING this query: {SQL}\n\n?The FOLLOWING IS information about the resulting pandas DataFrame ?: \n{df_metadata}?Can you generate the Python plotly code TO chart the results OF the dataframe? Assume the DATA IS IN a pandas dataframe CALLED ?. IF there IS ONLY one value IN the dataframe,
+                                                                                                                                                                                    USE an Indicator. Respond WITH ONLY Python code. DO NOT answer WITH ANY explanations -- just the code."
+ ), ] plotly_code = self.submit_prompt(message_log, kwargs=kwargs) RETURN self._sanitize_plotly_code(self._extract_python_code(plotly_code)) # ----------------- Connect to Any Database to run the Generated SQL ----------------- #
+  def connect_to_snowflake(SELF, ACCOUNT: STR, username: STR, password: STR, DATABASE: STR, ROLE:
+                           UNION[STR, NONE] = NONE, warehouse:
+                           UNION[STR, NONE] = NONE, **kwargs): try: snowflake = __import__(?) 
+EXCEPT ImportError: RAISE DependencyError(? ?) IF username == ?: username_env = os.getenv(?) IF username_env IS NOT NONE: username = username_env ELSE: RAISE ImproperlyConfigured(?) IF password == ?: password_env = os.getenv(?) IF password_env IS NOT NONE: password = password_env ELSE: RAISE ImproperlyConfigured(?) IF ACCOUNT == ?: account_env = os.getenv(?) IF account_env IS NOT NONE: ACCOUNT = account_env ELSE: RAISE ImproperlyConfigured(?) IF DATABASE == ?: database_env = os.getenv(?) IF database_env IS NOT NONE: DATABASE = database_env ELSE: RAISE ImproperlyConfigured(?) conn = snowflake.connector.connect(USER=username, password=password, ACCOUNT=ACCOUNT, DATABASE=DATABASE, client_session_keep_alive=TRUE, **kwargs) def run_sql_snowflake(SQL: STR) -> pd.DataFrame: cs = conn.cursor() IF ROLE IS NOT NONE: cs.execute(f?) IF warehouse IS NOT NONE: cs.execute(f?) cs.execute(f?) cur = cs.execute(SQL) results = cur.fetchall() # Create a pandas dataframe from the results
+ df = pd.DataFrame(results, columns=[DESC[?]
+                   FOR DESC IN cur.description]) RETURN df self.dialect = ? self.run_sql = run_sql_snowflake self.run_sql_is_set = TRUE def connect_to_sqlite(SELF, url: STR, check_same_thread: bool = FALSE, **kwargs): ? # URL of the database to download
+  # Path to save the downloaded database
+ PATH = os.path.basename(urlparse(url).path) # Download the database if it doesn't exist
+ IF NOT os.path.exists(url): response = requests.get(url) response.raise_for_status() # Check that the request was successful
+ WITH open(PATH, ?) AS f: f.write(response.content) url = PATH # Connect to the database
+ conn = sqlite3.connect(url, check_same_thread=check_same_thread, **kwargs) def run_sql_sqlite(SQL: STR): RETURN pd.read_sql_query(SQL, conn) self.dialect = ? self.run_sql = run_sql_sqlite self.run_sql_is_set = TRUE def connect_to_postgres(SELF, HOST: STR = NONE, dbname: STR = NONE, USER: STR = NONE, password: STR = NONE, port: int = NONE, **kwargs): ?myhost?mydatabase?myuser?mypassword? try: import psycopg2 import psycopg2.extras 
+EXCEPT ImportError: RAISE DependencyError(? ?) IF NOT HOST: HOST = os.getenv(?) IF NOT HOST: RAISE ImproperlyConfigured(?) IF NOT dbname: dbname = os.getenv(?) IF NOT dbname: RAISE ImproperlyConfigured(?) IF NOT USER: USER = os.getenv(?) IF NOT USER: RAISE ImproperlyConfigured(?) IF NOT password: password = os.getenv(?) IF NOT password: RAISE ImproperlyConfigured(?) IF NOT port: port = os.getenv(?) IF NOT port: RAISE ImproperlyConfigured(?) conn = NONE try: conn = psycopg2.connect(HOST=HOST, dbname=dbname, USER=USER, password=password, port=port, **kwargs) 
+EXCEPT psycopg2.Error AS e: RAISE ValidationError(e) def connect_to_db(): RETURN psycopg2.connect(HOST=HOST, dbname=dbname, USER=USER, password=password, port=port, **kwargs) def run_sql_postgres(SQL: STR) ->
+UNION[pd.DataFrame, 
+      NONE]: conn = NONE try: conn = connect_to_db() # Initial connection attempt
+ cs = conn.cursor() cs.execute(SQL) results = cs.fetchall() # Create a pandas dataframe from the results
+ df = pd.DataFrame(results, columns=[DESC[?]
+                   FOR DESC IN cs.description]) RETURN df 
+EXCEPT psycopg2.InterfaceError AS e: # Attempt to reconnect and retry the operation
+ IF conn: conn.close() # Ensure any existing connection is closed
+ conn = connect_to_db() cs = conn.cursor() cs.execute(SQL) results = cs.fetchall() # Create a pandas dataframe from the results
+ df = pd.DataFrame(results, columns=[DESC[?]
+                   FOR DESC IN cs.description]) RETURN df 
+EXCEPT psycopg2.Error AS e: IF conn: conn.rollback() RAISE ValidationError(e) 
+EXCEPT
+EXCEPTION AS e: conn.rollback() RAISE e self.dialect = ? self.run_sql_is_set = TRUE self.run_sql = run_sql_postgres def connect_to_mysql(SELF, HOST: STR = NONE, dbname: STR = NONE, USER: STR = NONE, password: STR = NONE, port: int = NONE, **kwargs): try: import pymysql.cursors 
+EXCEPT ImportError: RAISE DependencyError(? ?) IF NOT HOST: HOST = os.getenv(?) IF NOT HOST: RAISE ImproperlyConfigured(?) IF NOT dbname: dbname = os.getenv(?) IF NOT dbname: RAISE ImproperlyConfigured(?) IF NOT USER: USER = os.getenv(?) IF NOT USER: RAISE ImproperlyConfigured(?) IF NOT password: password = os.getenv(?) IF NOT password: RAISE ImproperlyConfigured(?) IF NOT port: port = os.getenv(?) IF NOT port: RAISE ImproperlyConfigured(?) conn = NONE try: conn = pymysql.connect(HOST=HOST, USER=USER, password=password, DATABASE=dbname, port=port, cursorclass=pymysql.cursors.DictCursor, **kwargs) 
+EXCEPT pymysql.Error AS e: RAISE ValidationError(e) def run_sql_mysql(SQL: STR) ->
+UNION[pd.DataFrame, 
+      NONE]: IF conn: try: conn.ping(reconnect=TRUE) cs = conn.cursor() cs.execute(SQL) results = cs.fetchall() # Create a pandas dataframe from the results
+ df = pd.DataFrame(results, columns=[DESC[?]
+                   FOR DESC IN cs.description]) RETURN df 
+EXCEPT pymysql.Error AS e: conn.rollback() RAISE ValidationError(e) 
+EXCEPT
+EXCEPTION AS e: conn.rollback() RAISE e self.run_sql_is_set = TRUE self.run_sql = run_sql_mysql def connect_to_clickhouse(SELF, HOST: STR = NONE, dbname: STR = NONE, USER: STR = NONE, password: STR = NONE, port: int = NONE, **kwargs): try: import clickhouse_connect 
+EXCEPT ImportError: RAISE DependencyError(? ?) IF NOT HOST: HOST = os.getenv(?) IF NOT HOST: RAISE ImproperlyConfigured(?) IF NOT dbname: dbname = os.getenv(?) IF NOT dbname: RAISE ImproperlyConfigured(?) IF NOT USER: USER = os.getenv(?) IF NOT USER: RAISE ImproperlyConfigured(?) IF NOT password: password = os.getenv(?) IF NOT password: RAISE ImproperlyConfigured(?) IF NOT port: port = os.getenv(?) IF NOT port: RAISE ImproperlyConfigured(?) conn = NONE try: conn = clickhouse_connect.get_client(HOST=HOST, port=port, username=USER, password=password, DATABASE=dbname, **kwargs) print(conn) 
+EXCEPT
+EXCEPTION AS e: RAISE ValidationError(e) def run_sql_clickhouse(SQL: STR) ->
+UNION[pd.DataFrame, 
+      NONE]: IF conn: try: RESULT = conn.query(SQL) results = result.result_rows # Create a pandas dataframe from the results
+ df = pd.DataFrame(results, columns=result.column_names) RETURN df 
+EXCEPT
+EXCEPTION AS e: RAISE e self.run_sql_is_set = TRUE self.run_sql = run_sql_clickhouse def connect_to_oracle(SELF, USER: STR = NONE, password: STR = NONE, dsn: STR = NONE, **kwargs): ?username?password?HOST:port/sid? try: import oracledb 
+EXCEPT ImportError: RAISE DependencyError(? ?) IF NOT dsn: dsn = os.getenv(?) IF NOT dsn: RAISE ImproperlyConfigured(?) IF NOT USER: USER = os.getenv(?) IF NOT USER: RAISE ImproperlyConfigured(?) IF NOT password: password = os.getenv(?) IF NOT password: RAISE ImproperlyConfigured(?) conn = NONE try: conn = oracledb.connect(USER=USER, password=password, dsn=dsn, **kwargs)
+EXCEPT oracledb.Error AS e: RAISE ValidationError(e) def run_sql_oracle(SQL: STR) ->
+UNION[pd.DataFrame,
+      NONE]: IF conn: try: SQL = sql.rstrip() IF sql.endswith(?): #fix
+FOR a known problem WITH Oracle db
+WHERE an extra ;---SQL_SEPARATOR---
+Extracts the SQL query
+FROM the LLM response,
+             handling various formats INCLUDING: - WITH clause -
+SELECT STATEMENT -
+CREATE TABLE AS
+SELECT - Markdown code blocks---SQL_SEPARATOR---
+FAISS IS NOT installed. Please install it WITH ?
+OR ?---SQL_SEPARATOR---
+FIRST question: ?\nSecond question: ? **Example:** ```python
+        vn.generate_followup_questions("What are the top 10 customers by sales?", sql, df)
+        ``` Generate a list OF followup questions that you can ask Vanna.AI. Args: question (STR): The question that was asked. SQL (STR): The LLM-GENERATED SQL query. df (pd.DataFrame): The results OF the SQL query. n_questions (int): Number OF follow-up questions TO generate. RETURNS: list: A list OF followup questions that you can ask Vanna.AI. ?You ARE a helpful DATA assistant. The USER asked the question: ?\n\nThe SQL query
+FOR this question was: {SQL}\n\nThe FOLLOWING IS a pandas DataFrame WITH the results OF the query: \n{df.head(?).to_markdown()}\n\n---SQL_SEPARATOR---
+Generate a list OF {n_questions} followup questions that the USER might ask about this data. Respond WITH a list OF questions,
+                                                                                                                    one per line. DO NOT answer WITH ANY explanations -- just the questions. Remember that there should be an unambiguous SQL query that can be generated from the question. Prefer questions that are answerable outside of the context of this conversation. Prefer questions that are slight modifications of the SQL query that was generated that allow digging deeper into the data. Each question will be turned into a button that the user can click to generate a new SQL query so don't use 'example' type questions. Each question must have a one-to-one correspondence with an instantiated SQL query.---SQL_SEPARATOR---
+HOST: ? port: ? ssl: ? verify_certs: ? timeout: ? max_retries: ?OpenSearch_VectorStore initialized WITH client OVER---SQL_SEPARATOR---
+IF len(df) > ?
+AND df.select_dtypes(INCLUDE=['number']).shape[?] > ?: RETURN TRUE RETURN FALSE def generate_rewritten_question(SELF, last_question: STR, new_question: STR, **kwargs) -> STR:---SQL_SEPARATOR---
+IF self.allow_llm_to_see_data: followup_questions = vn.generate_followup_questions(question=question, SQL=SQL, df=df) IF followup_questions IS NOT NONE
+AND len(followup_questions) > ?: followup_questions = followup_questions[:5] self.cache.set(id=id, field=?, value=followup_questions) RETURN jsonify({ ?: ?, ?: id, ?: followup_questions, ?: ?, }) ELSE: self.cache.set(id=id, field=?, value=[]) RETURN jsonify({ ?: ?, ?: id, ?: [], ?: ?, }) @self.flask_app.route(?, methods=["GET"]) @self.requires_auth @self.requires_cache(["df", "question"]) def generate_summary(USER: ANY, id: STR, df, question): ? IF self.allow_llm_to_see_data: SUMMARY = vn.generate_summary(question=question, df=df) self.cache.set(id=id, field=?, value=SUMMARY) RETURN jsonify({ ?: ?, ?: id, ?: SUMMARY, }) ELSE: RETURN jsonify({ ?: ?, ?: id, ?: ?, }) @self.flask_app.route(?, methods=["GET"]) @self.requires_auth @self.requires_cache(["question", "sql", "df"], optional_fields=["summary", "fig_json"]) def load_question(USER: ANY, id: STR, question, SQL, df, fig_json, SUMMARY): ? try: RETURN jsonify({ ?: ?, ?: id, ?: question, ?: SQL, ?: df.head(?).to_json(orient=?, date_format=?), ?: fig_json, ?: SUMMARY, })
+EXCEPT
+EXCEPTION AS e: RETURN jsonify({?: ?, ?: str(e)}) @self.flask_app.route(?, methods=["GET"]) @self.requires_auth def get_question_history(USER: ANY): ? RETURN jsonify({ ?: ?, ?: cache.get_all(field_list=["question"]), }) @self.flask_app.route(?, methods=["GET", "POST"]) def catch_all(catch_all): RETURN jsonify({?: ?, ?: ?}) IF self.debug: @self.sock.route(?) def sock_log(ws): self.ws_clients.append(ws) try: WHILE TRUE: message = ws.receive() # This example just reads and ignores to keep the socket open
+ finally: self.ws_clients.remove(ws) def run(SELF, *args, **kwargs): ? IF args
+OR kwargs: self.flask_app.run(*args, **kwargs) ELSE: try:
+FROM google.colab import OUTPUT output.serve_kernel_port_as_window(?)
+FROM google.colab.output import eval_js print(?) print(eval_js(?))
+EXCEPT: print(?) print(?) self.flask_app.run(HOST=?, port=?, debug=self.debug, use_reloader=FALSE) CLASS VannaFlaskApp(VannaFlaskAPI): def __init__(SELF, vn: VannaBase, CACHE: CACHE = MemoryCache(), auth: AuthInterface = NoAuth(), debug=TRUE, allow_llm_to_see_data=FALSE, logo=?, title=?, subtitle=?, show_training_data=TRUE, suggested_questions=TRUE, SQL=TRUE, TABLE=TRUE, csv_download=TRUE, chart=TRUE, redraw_chart=TRUE, auto_fix_sql=TRUE, ask_results_correct=TRUE, followup_questions=TRUE, summarization=TRUE, function_generation=TRUE, index_html_path=NONE, assets_folder=NONE,): ?Welcome TO Vanna.AI?Your AI-powered copilot
+FOR SQL queries.". show_training_data: Whether TO SHOW the training DATA IN the UI. DEFAULTS TO True. suggested_questions: Whether TO SHOW suggested questions IN the UI. DEFAULTS TO True. SQL: Whether TO SHOW the SQL INPUT IN the UI. DEFAULTS TO True. TABLE: Whether TO SHOW the TABLE OUTPUT IN the UI. DEFAULTS TO True. csv_download: Whether TO allow downloading the TABLE OUTPUT AS a CSV file. DEFAULTS TO True. chart: Whether TO SHOW the chart OUTPUT IN the UI. DEFAULTS TO True. redraw_chart: Whether TO allow redrawing the chart. DEFAULTS TO True. auto_fix_sql: Whether TO allow auto-fixing SQL errors. DEFAULTS TO True. ask_results_correct: Whether TO ask the USER IF the results ARE correct. DEFAULTS TO True. followup_questions: Whether TO SHOW followup questions. DEFAULTS TO True. summarization: Whether TO SHOW summarization. DEFAULTS TO True. index_html_path: PATH TO the index.html. DEFAULTS TO NONE,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            which will USE the DEFAULT index.html assets_folder: The LOCATION
+WHERE you'd like TO serve the STATIC assets
+  FROM. DEFAULTS TO NONE,
+                    which will USE hardcoded Python variables. RETURNS: NONE---SQL_SEPARATOR---
+IN DATA
+AND isinstance(DATA[?], list): # Iterate over each item in 'hits'
+  IF len(DATA[?]) == ?: RETURN [] # If there is a "doc" key, return the value of that key
+ IF ? IN DATA[?][?]: RETURN [hit[?]
+FOR hit IN DATA[?]] # If there is a "ddl" key, return the value of that key
+ IF ? IN DATA[?][?]: RETURN [hit[?]
+FOR hit IN DATA[?]] # Otherwise return the entire hit
+ RETURN [ {KEY: value
+FOR KEY,
+    value IN hit.items() IF NOT key.startswith(---SQL_SEPARATOR---
+IN model_name: # remove double hyphones
+ model_name = re.sub(r?, ?, model_name) IF ? IN model_name: # If name contains both underscores and hyphen replace all underscores with hyphens
+ model_name = re.sub(r---SQL_SEPARATOR---
+INITIALIZE the VannaEnhanced CLASS WITH the provided configuration. :param config: DICTIONARY containing configuration parameters. params: weaviate_url (STR): Weaviate CLUSTER URL WHILE USING weaviate cloud,
+                                                                                                                                                                                                weaviate_api_key (STR): Weaviate API KEY WHILE USING weaviate cloud,
+                                                                                                                                                                                                                                                     weaviate_port (num): Weaviate port WHILE USING LOCAL weaviate,
+                                                                                                                                                                                                                                                                                                          weaviate_grpc (num): Weaviate gRPC port WHILE USING LOCAL weaviate,
+                                                                                                                                                                                                                                                                                                                                                                    fastembed_model (STR): Fastembed model name
+FOR text embeddings. BAAI/bge-small-en-v1? BY default.---SQL_SEPARATOR---
+NO SQL GENERATED?SQL Unable TO Run?Bootstrap Training Query?SQL Ran Successfully?Flagged
+FOR Review?Reviewed
+AND Approved?Reviewed
+AND Rejected" REVIEWED_AND_UPDATED =---SQL_SEPARATOR---
+NO such configuration FILE: {PATH}?Config should be a FILE: {PATH}?Cannot READ the config file. Please GRANT READ PRIVILEGES: {PATH}' ) def sanitize_model_name(model_name): try: model_name = model_name.lower() # Replace spaces with a hyphen
+ model_name = model_name.replace(?, ?) IF---SQL_SEPARATOR---
+PATH?.?embedding_function?client?persistent?collection_metadata?n_results_sql?n_results?n_results_documentation?n_results?n_results_ddl?n_results?persistent?IN-memory?Unsupported client was
+SET IN config: {curr_client}?documentation?ddl?SQL?question?SQL?-SQL?-ddl?-doc?documents?ids?id?question?question?content?SQL?training_data_type?SQL?documents?ids?id?question?content?training_data_type?ddl?documents?ids?id?question?content?training_data_type?documentation" df = pd.concat([df, df_doc]) RETURN df def remove_training_data(SELF, id: STR, **kwargs) -> bool: IF id.endswith(---SQL_SEPARATOR---
+PATH?.?n_results?n_results?n_results?client?persistent?Unsupported
+STORAGE TYPE was
+SET IN config: {self.curr_client}") self.sql_metadata: List[Dict[STR,
+                                                                 ANY]] = self._load_or_create_metadata(?) self.ddl_metadata: List[Dict[STR,
+                                                                                                                                                         STR]] = self._load_or_create_metadata(?) self.doc_metadata: List[Dict[STR,
+                                                                                                                                                                                                                                                 STR]] = self._load_or_create_metadata(?) model_name = config.get(?, ?) self.embedding_model = SentenceTransformer(model_name) def _load_or_create_index(SELF, filename): filepath = os.path.join(self.path, filename) IF os.path.exists(filepath): RETURN faiss.read_index(filepath) RETURN faiss.IndexFlatL2(self.embedding_dim) def _load_or_create_metadata(SELF, filename): filepath = os.path.join(self.path, filename) IF os.path.exists(filepath): WITH open(filepath, ?) AS f: RETURN json.load(f) RETURN [] def _save_index(SELF, INDEX, filename): IF self.curr_client == ?: filepath = os.path.join(self.path, filename) faiss.write_index(INDEX, filepath) def _save_metadata(SELF, metadata, filename): IF self.curr_client == ?: filepath = os.path.join(self.path, filename) WITH open(filepath, ?) AS f: json.dump(metadata, f) def generate_embedding(SELF, DATA: STR, **kwargs) -> List[float]: embedding = self.embedding_model.encode(DATA) assert embedding.shape[?] == self.embedding_dim, \ f---SQL_SEPARATOR---
+Please install boto3
+AND botocore TO USE Amazon Bedrock models?A VALID Bedrock runtime client must be provided TO invoke Bedrock models?Config IS required WITH model_id
+AND inference PARAMETERS---SQL_SEPARATOR---
+ROWS_PRODUCED > ??QUERY_TEXT?QUERY_TEXT?QUERY_TEXT?Trying INFORMATION_SCHEMA.COLUMNS
+FOR {DATABASE}?
+SELECT *
+FROM {DATABASE}.INFORMATION_SCHEMA.COLUMNS---SQL_SEPARATOR---
+SELECT a.ArtistId,
+       a.Name,
+       SUM(il.Quantity) AS TotalSales\nFROM Artist a\nINNER
+JOIN Album al ON a.ArtistId = al.ArtistId\nINNER
+JOIN Track t ON al.AlbumId = t.AlbumId\nINNER
+JOIN InvoiceLine il ON t.TrackId = il.TrackId\nGROUP BY a.ArtistId,
+                                                        a.Name\nORDER BY TotalSales ASC\nLIMIT ?;---SQL_SEPARATOR---
+SELECT g.Name AS Genre,
+       SUM(il.Quantity) AS TotalSales\nFROM Genre g\nJOIN Track t ON g.GenreId = t.GenreId\nJOIN InvoiceLine il ON t.TrackId = il.TrackId\nGROUP BY g.GenreId,
+                                                                                                                                                    g.Name\nORDER BY TotalSales DESC;---SQL_SEPARATOR---
+SQL = flask.request.json.get(?) IF SQL IS NONE: RETURN jsonify({?: ?, ?: ?}) self.cache.set(id=id, field=?, value=SQL) RETURN jsonify({ ?: ?, ?: id, ?: SQL, }) @self.flask_app.route(?, methods=["GET"]) @self.requires_auth @self.requires_cache(["df"]) def download_csv(USER: ANY, id: STR, df): ? csv = df.to_csv() RETURN Response(csv, mimetype=?, headers={?: f?},) @self.flask_app.route(?, methods=["GET"]) @self.requires_auth @self.requires_cache(["df", "question", "sql"]) def generate_plotly_figure(USER: ANY, id: STR, df, question, SQL): ? chart_instructions = flask.request.args.get(?) try: # If chart_instructions is not set then attempt to retrieve the code from the cache
+ IF chart_instructions IS NONE
+OR len(chart_instructions) == ?: code = self.cache.get(id=id, field=?) ELSE: question = f? code = vn.generate_plotly_code(question=question, SQL=SQL, df_metadata=f?,) self.cache.set(id=id, field=?, value=code) fig = vn.get_plotly_figure(plotly_code=code, df=df, dark_mode=FALSE) fig_json = fig.to_json() self.cache.set(id=id, field=?, value=fig_json) RETURN jsonify({ ?: ?, ?: id, ?: fig_json, })
+EXCEPT
+EXCEPTION AS e: # Print the stack trace
+ import traceback traceback.print_exc() RETURN jsonify({?: ?, ?: str(e)}) @self.flask_app.route(?, methods=["GET"]) @self.requires_auth def get_training_data(USER: ANY): ? df = vn.get_training_data() IF df IS NONE
+OR len(df) == ?: RETURN jsonify({ ?: ?, ?: ?, }) RETURN jsonify({ ?: ?, ?: ?, ?: df.to_json(orient=?), }) @self.flask_app.route(?, methods=["POST"]) @self.requires_auth def remove_training_data(USER: ANY): ? # Get id from the JSON body
+ id = flask.request.json.get(?) IF id IS NONE: RETURN jsonify({?: ?, ?: ?}) IF vn.remove_training_data(id=id): RETURN jsonify({?: TRUE}) ELSE: RETURN jsonify({?: ?, ?: ?}) @self.flask_app.route(?, methods=["POST"]) @self.requires_auth def add_training_data(USER: ANY): ? question = flask.request.json.get(?) SQL = flask.request.json.get(?) ddl = flask.request.json.get(?) documentation = flask.request.json.get(?) try: id = vn.train(question=question, SQL=SQL, ddl=ddl, documentation=documentation) RETURN jsonify({?: id})
+EXCEPT
+EXCEPTION AS e: print(?, e) RETURN jsonify({?: ?, ?: str(e)}) @self.flask_app.route(?, methods=["GET"]) @self.requires_auth @self.requires_cache(["question", "sql"]) def create_function(USER: ANY, id: STR, question: STR, SQL: STR): ? plotly_code = self.cache.get(id=id, field=?) IF plotly_code IS NONE: plotly_code = ? function_data = self.vn.create_function(question=question, SQL=SQL, plotly_code=plotly_code) RETURN jsonify({ ?: ?, ?: id, ?: function_data, }) @self.flask_app.route(?, methods=["POST"]) @self.requires_auth def update_function(USER: ANY):---SQL_SEPARATOR---
+SQL?ddl?doc')?TYPE?SQL?question?TYPE?SQL?document?question?TYPE?SQL?content?TYPE?SQL?document?SQL?TYPE?SQL?content?TYPE?SQL?document?id?question?content?TYPE"]] RETURN pd.DataFrame() def remove_training_data(SELF, id: STR) -> bool: RESULT = self.search_client.delete_documents(documents=[{---SQL_SEPARATOR---
+SQL?metadata?ddl?matches?metadata?documentation?matches?metadata?SQL?matches"] ] IF res ELSE [] ) def get_training_data(SELF, **kwargs) -> pd.DataFrame: # Pinecone does not support getting all vectors in a namespace, so we have to query for the top_k vectors with a dummy vector
+ df = pd.DataFrame() namespaces = {---SQL_SEPARATOR---
+SentenceTransformer IS NOT installed. Please install it WITH ?.---SQL_SEPARATOR---
+TABLE_SCHEMA?INFORMATION_SCHEMA?TABLE_SCHEMA == ??TABLE_NAME?TABLE_NAME == ??The FOLLOWING columns ARE IN the {TABLE} TABLE IN the {DATABASE} DATABASE:\n\n?TABLE_CATALOG?TABLE_SCHEMA?TABLE_NAME?COLUMN_NAME?DATA_TYPE?COMMENT?{DATABASE}.{SCHEMA}? **Example:** ```python
+        fig = vn.get_plotly_figure(
+            plotly_code="fig = px.bar(df, x='name', y='salary')",
+            df=df
+        )
+        fig.show()
+        ``` GET a Plotly figure
+FROM a dataframe
+AND Plotly code. Args: df (pd.DataFrame): The dataframe TO use. plotly_code (STR): The Plotly code TO use. RETURNS: plotly.graph_objs.Figure: The Plotly figure. ?df?px?GO---SQL_SEPARATOR---
+The USER will give you SQL
+AND you will try TO guess what the business question this query IS answering. RETURN just the question WITHOUT ANY additional explanation. DO NOT reference the TABLE name IN the question.---SQL_SEPARATOR---
+This IS a SQLite database.
+FOR dates rememeber TO USE SQLite syntax.?
+SELECT c.CustomerId,
+       c.FirstName,
+       c.LastName,
+       SUM(i.Total) AS TotalSales\nFROM Customer c\nJOIN Invoice i ON c.CustomerId = i.CustomerId\nGROUP BY c.CustomerId,
+                                                                                                            c.FirstName,
+                                                                                                            c.LastName;---SQL_SEPARATOR---
+This METHOD IS used TO GET SIMILAR questions
+AND their
+CORRESPONDING SQL statements. Args: question (STR): The question TO GET SIMILAR questions
+AND their
+CORRESPONDING SQL statements for. RETURNS: list: A list OF SIMILAR questions
+AND their
+CORRESPONDING SQL statements. ? This METHOD IS used TO GET related DDL statements TO a question. Args: question (STR): The question TO GET related DDL statements for. RETURNS: list: A list OF related DDL statements. ? This METHOD IS used TO GET related documentation TO a question. Args: question (STR): The question TO GET related documentation for. RETURNS: list: A list OF related documentation. ? This METHOD IS used TO ADD a question
+AND its
+CORRESPONDING SQL query TO the training data. Args: question (STR): The question TO add. SQL (STR): The SQL query TO add. RETURNS: STR: The ID OF the training DATA that was added. ? This METHOD IS used TO ADD a DDL STATEMENT TO the training data. Args: ddl (STR): The DDL STATEMENT TO add. RETURNS: STR: The ID OF the training DATA that was added. ? This METHOD IS used TO ADD documentation TO the training data. Args: documentation (STR): The documentation TO add. RETURNS: STR: The ID OF the training DATA that was added. ? Example: ```python
+        vn.get_training_data()
+        ``` This METHOD IS used TO GET ALL the training DATA
+FROM the retrieval layer. RETURNS: pd.DataFrame: The training data. ? Example: ```python
+        vn.remove_training_data(id="123-ddl")
+        ``` This METHOD IS used TO remove training DATA
+FROM the retrieval layer. Args: id (STR): The ID OF the training DATA TO remove. RETURNS: bool: TRUE IF the training DATA was removed,
+                                                                                                                          FALSE otherwise. ?\n===TABLES \n?{ddl}\n\n?\n===Additional Context \n\n?{documentation}\n\n?\n===Question-SQL Pairs\n\n?SQL?{question[?]}\n{question[?]}\n\n? Example: ```python
+        vn.get_sql_prompt(
+            question="What are the top 10 customers by sales?",
+            question_sql_list=[{"question": "What are the top 10 customers by sales?", "sql": "SELECT * FROM customers ORDER BY sales DESC LIMIT 10"}],
+            ddl_list=["CREATE TABLE customers (id INT, name TEXT, sales DECIMAL)"],
+            doc_list=["The customers table contains information about customers and their sales."],
+        )
+
+        ``` This METHOD IS used TO generate a prompt
+FOR the LLM TO generate SQL. Args: question (STR): The question TO generate SQL for. question_sql_list (list): A list OF questions
+AND their
+CORRESPONDING SQL statements. ddl_list (list): A list OF DDL statements. doc_list (list): A list OF documentation. RETURNS: ANY: The prompt
+FOR the LLM TO generate SQL.---SQL_SEPARATOR---
+This METHOD IS used TO generate a training PLAN
+FROM an information SCHEMA dataframe. Basically what it does IS breaks up INFORMATION_SCHEMA.COLUMNS INTO groups OF TABLE/COLUMN descriptions that can be used TO pass TO the LLM. Args: df (pd.DataFrame): The dataframe TO generate the training PLAN
+FROM. RETURNS: TrainingPlan: The training plan. ?DATABASE?table_catalog?table_schema?TABLE_NAME?COLUMN_NAME?data_type?COMMENT?|?{DATABASE}?{DATABASE}?{SCHEMA}?{DATABASE}?{SCHEMA}?{TABLE}?The FOLLOWING columns ARE IN the {TABLE} TABLE IN the {DATABASE} DATABASE:\n\n?{DATABASE}.{SCHEMA}?Please CONNECT TO a DATABASE first.?Trying query history?
+SELECT *
+FROM table(information_schema.query_history(result_limit => ?))
+ORDER BY start_time---SQL_SEPARATOR---
+Trying SHOW DATABASES?SHOW DATABASES?DATABASE_NAME?
+SELECT *
+FROM {DATABASE}.INFORMATION_SCHEMA.TABLES---SQL_SEPARATOR---
+Vectorstore IMPLEMENTATION USING Qdrant - https://qdrant.tech/ Args: - config (dict, optional): DICTIONARY OF `Qdrant_VectorStore config` options. DEFAULTS TO `{}`. - client: A `qdrant_client.QdrantClient` instance. Overrides other config options. - LOCATION: IF `":memory:"` - USE IN-memory Qdrant instance. IF `str` - USE it AS a `url` parameter. - url: Either HOST
+OR STR OF ?. Eg. `"http://localhost:6333"`. - prefer_grpc: IF `true` - USE gPRC interface WHENEVER possible IN custom methods. - https: IF `true` - USE HTTPS(SSL) protocol. DEFAULT: `None` - api_key: API KEY
+FOR authentication IN Qdrant Cloud. DEFAULT: `None` - timeout: Timeout
+FOR REST
+AND gRPC API requests. DEFAULTS TO ? seconds
+FOR REST
+AND
+UNLIMITED
+FOR gRPC. - PATH: Persistence PATH
+FOR QdrantLocal. DEFAULT: `None`. - PREFIX: PREFIX TO the REST URL paths. Example: `service/v1` will RESULT IN `http://localhost:6333/service/v1/{qdrant-endpoint}`. - n_results: Number OF results TO RETURN
+FROM similarity search. DEFAULTS TO ? - fastembed_model: [Model](https://qdrant.github.io/fastembed/examples/Supported_Models/#supported-text-embedding-models) TO USE
+FOR `fastembed.TextEmbedding`. DEFAULTS TO `"BAAI/bge-small-en-v1.5"`. - collection_params: Additional PARAMETERS TO pass TO `qdrant_client.QdrantClient#create_collection()` method. - distance_metric: Distance metric TO USE WHEN creating collections. DEFAULTS TO `qdrant_client.models.Distance.COSINE`. - documentation_collection_name: Name OF the collection TO store documentation. DEFAULTS TO `"documentation"`. - ddl_collection_name: Name OF the collection TO store DDL. DEFAULTS TO `"ddl"`. - sql_collection_name: Name OF the collection TO store SQL. DEFAULTS TO `"sql"`. Raises: TypeError: IF config[?] IS NOT a `qdrant_client.QdrantClient` INSTANCE ?client?LOCATION?url?prefer_grpc?https?api_key?timeout?PATH?PREFIX?Unsupported client OF TYPE {client.__class__} was
+SET IN config?n_results?fastembed_model?BAAI/bge-small-en-v1??collection_params?distance_metric?documentation_collection_name?documentation?ddl_collection_name?ddl?sql_collection_name?SQL?ddl?doc?SQL?Question: {?}\n\nSQL: {?}?question?SQL?ddl?documentation?question?SQL?id?question?content?training_data_type?SQL?ddl?id?question?content?training_data_type?ddl?documentation?id?question?content?training_data_type?documentation" df = pd.concat([df, df_doc]) RETURN df def remove_training_data(SELF, id: STR, **kwargs) -> bool: try: id,
+                                                                                                                                                                  collection_name = self._parse_point_id(id) res = self._client.delete(collection_name, points_selector=[id]) RETURN TRUE
+EXCEPT ValueError: RETURN FALSE def remove_collection(SELF, collection_name: STR) -> bool:---SQL_SEPARATOR---
+Who ARE the top ? customers BY sales??SHOW me their email addresses") ``` Generate a rewritten question BY combining the LAST question
+AND the NEW question IF they ARE related. IF the NEW question IS SELF-contained
+AND NOT related TO the LAST question,
+                            RETURN the NEW question. Args: last_question (STR): The previous question that was asked. new_question (STR): The NEW question TO be combined WITH the LAST question. **kwargs: Additional keyword arguments. RETURNS: STR: The combined question IF related,
+                                                                                                                                                                                                                                                                                 otherwise the NEW question.---SQL_SEPARATOR---
+You ARE a {self.dialect} expert. ?Please help TO generate a SQL query TO answer the question. Your response should ONLY be based ON the given context
+AND follow the response guidelines
+AND format instructions. ?===Response Guidelines \n?? IF the provided context IS sufficient,
+                                           please generate a VALID SQL query WITHOUT ANY explanations
+FOR the question. \n---SQL_SEPARATOR---
+You need TO CONNECT TO a DATABASE FIRST BY running vn.connect_to_snowflake(),
+                                           vn.connect_to_postgres(),
+                                           SIMILAR FUNCTION,
+OR manually
+SET vn.run_sql? **Example:** ```python
+        vn.ask("What are the top 10 customers by sales?")
+        ``` Ask Vanna.AI a question
+AND GET the SQL query that answers it. Args: question (STR): The question TO ask. print_results (bool): Whether TO PRINT the results OF the SQL query. auto_train (bool): Whether TO automatically train Vanna.AI ON the question
+AND SQL query. visualize (bool): Whether TO generate plotly code
+AND display the plotly figure. RETURNS: Tuple[STR,
+                                              pd.DataFrame,
+                                              plotly.graph_objs.Figure]: The SQL query,
+                                                                                 the results OF the SQL query,
+AND the plotly figure. ?Enter a question: ?IPython.display?Code?IF you want TO run the SQL query,
+                                            CONNECT TO a DATABASE first.?IPython.display?display?Running df.dtypes gives:\n {df.dtypes}?IPython.display?display?IPython.display?Image?png?Couldn?t run SQL: ? **Example:** ```python
+        vn.train()
+        ``` Train Vanna.AI ON a question
+AND its
+CORRESPONDING SQL query. IF you CALL it WITH NO arguments,
+                                                it will CHECK IF you connected TO a DATABASE
+AND it will attempt TO train ON the metadata OF that database. IF you CALL it WITH the SQL argument,
+                                                                                           it?s equivalent TO [`vn.add_ddl()`][vanna.base.base.VannaBase.add_ddl]. IF you CALL it WITH the documentation argument,
+                                                                                                                                                            it's equivalent TO [`vn.add_documentation()`][vanna.base.base.VannaBase.add_documentation]. Additionally,
+                                                                                                                                                                               you can pass a [`TrainingPlan`][vanna.types.TrainingPlan] object. GET a training PLAN WITH [`vn.get_training_plan_generic()`][vanna.base.base.VannaBase.get_training_plan_generic]. Args: question (STR): The question TO train on. SQL (STR): The SQL query TO train on. ddl (STR): The DDL statement. documentation (STR): The documentation TO train on. PLAN (TrainingPlan): The training PLAN TO train on.---SQL_SEPARATOR---
+\bCREATE\s+TABLE\b.*?\bAS\b.*?;---SQL_SEPARATOR---
+\nAdding SQL...?Adding ddl:?Trying INFORMATION_SCHEMA.DATABASES?
+SELECT *
+FROM INFORMATION_SCHEMA.DATABASES---SQL_SEPARATOR---
+]
+FOR RESULT IN results] def generate_embedding(SELF, DATA: STR, **kwargs) -> List[float]: embedding_model = self._client._get_or_init_model(model_name=self.fastembed_model) embedding = next(embedding_model.embed(DATA)) RETURN embedding.tolist() def _get_all_points(SELF, collection_name: STR): results: List[models.Record] = [] next_offset = NONE stop_scrolling = FALSE WHILE NOT stop_scrolling: records,
+                                                                                                                                                                                                                                                                                                                                                                                                           next_offset = self._client.scroll(collection_name,
+                                                                                                                                                                                                                                                                                                                                                                                                                                             LIMIT=SCROLL_SIZE,
+                                                                                                                                                                                                                                                                                                                                                                                                                                             OFFSET=next_offset, with_payload=TRUE, with_vectors=FALSE,) stop_scrolling = next_offset IS NONE
+OR ( isinstance(next_offset, grpc.PointId)
+AND next_offset.num == ?
+AND next_offset.uuid ==---SQL_SEPARATOR---
+]
+FOR RESULT IN results] def get_related_documentation(SELF, question: STR, **kwargs) -> list: results = self._client.query_points(self.documentation_collection_name, query=self.generate_embedding(question),
+                                                                                                                                 LIMIT=self.n_results, with_payload=TRUE,).points RETURN [result.payload[---SQL_SEPARATOR---
+] IF train_type == ?: update_json = json.dumps( {---SQL_SEPARATOR---
+]) RETURN [item[?]
+FOR item IN response_list] def get_related_documentation(SELF, question: STR, **kwargs) -> list: vector_input = self.generate_embedding(question) response_list = self._query_collection(?, vector_input, ["description"]) RETURN [item[?]
+FOR item IN response_list] def get_similar_question_sql(SELF, question: STR, **kwargs) -> list: vector_input = self.generate_embedding(question) response_list = self._query_collection(?, vector_input, ["sql", "natural_language_question"]) RETURN [{?: item[?], ?: item[?]}
+FOR item IN response_list] def get_training_data(SELF, **kwargs) -> list: self.weaviate_client.connect() combined_response_list = []
+FOR collection_name IN self.training_data_cluster.
+VALUES(): IF self.weaviate_client.collections.exists(collection_name): collection = self.weaviate_client.collections.get(collection_name) response_list = [item.properties for item in collection.iterator()] combined_response_list.extend(response_list) self.weaviate_client.close() RETURN combined_response_list def remove_training_data(SELF, id: STR, **kwargs) -> bool: self.weaviate_client.connect() success = FALSE IF id.endswith(---SQL_SEPARATOR---
+]) RETURN status.id def add_ddl(SELF, ddl: STR, **kwargs) -> STR: params = [StringData(data=ddl)] d = self._rpc_call(METHOD=?, params=params) IF ? NOT IN d: RAISE Exception(?, d) status = StatusWithId(**d[---SQL_SEPARATOR---
+]) RETURN status.id def add_documentation(SELF, documentation: STR, **kwargs) -> STR: params = [StringData(data=documentation)] d = self._rpc_call(METHOD=?, params=params) IF ? NOT IN d: RAISE Exception(?, d) status = StatusWithId(**d[---SQL_SEPARATOR---
+]).columns.tolist() categorical_cols = df.select_dtypes( INCLUDE=[---SQL_SEPARATOR---
+][?]
+FOR hit IN response[?][?]] def get_related_documentation(SELF, question: STR, **kwargs) -> List[STR]: query = { ?: { ?: { ?: question } } } print(query) response = self.client.search(INDEX=self.document_index, BODY=query, **kwargs) RETURN [hit[?][?]
+FOR hit IN response[?][?]] def get_similar_question_sql(SELF, question: STR, **kwargs) -> List[STR]: query = { ?: { ?: { ?: question } } } print(query) response = self.client.search(INDEX=self.question_sql_index, BODY=query, **kwargs) RETURN [(hit[?][?], hit[?][?])
+FOR hit IN response[?][?]] def get_training_data(SELF, **kwargs) -> pd.DataFrame: # This will be a simple example pulling all data from an index
+ # WARNING: Do not use this approach in production for large indices!
+ DATA = [] response = self.client.search(INDEX=self.document_index, BODY={?: {?: {}}}, SIZE=?) print(query) # records = [hit['_source'] for hit in response['hits']['hits']]
+
+FOR hit IN response[?][?]: data.append({ ?: hit[?], ?: ?, ?: ?, ?: hit[?][?], }) response = self.client.search(INDEX=self.question_sql_index, BODY={?: {?: {}}}, SIZE=?) # records = [hit['_source'] for hit in response['hits']['hits']]
+
+FOR hit IN response[?][?]: data.append({ ?: hit[?], ?: ?, ?: hit.get(?, {}).get(?, ?), ?: hit.get(?, {}).get(?, ?), }) response = self.client.search(INDEX=self.ddl_index, BODY={?: {?: {}}}, SIZE=?) # records = [hit['_source'] for hit in response['hits']['hits']]
+
+FOR hit IN response[?][?]: data.append({ ?: hit[?], ?: ?, ?: ?, ?: hit[?][?], }) RETURN pd.DataFrame(DATA) def remove_training_data(SELF, id: STR, **kwargs) -> bool: try: IF id.endswith(?): self.client.delete(INDEX=self.question_sql_index, id=id) RETURN TRUE elif id.endswith(?): self.client.delete(INDEX=self.ddl_index, id=id, **kwargs) RETURN TRUE elif id.endswith(?): self.client.delete(INDEX=self.document_index, id=id, **kwargs) RETURN TRUE ELSE: RETURN FALSE
+EXCEPT
+EXCEPTION AS e: print(?, e) RETURN FALSE def generate_embedding(SELF, DATA: STR, **kwargs) -> list[float]: # opensearch doesn---SQL_SEPARATOR---
+^\d+\.\s*?\n? **Example:** ```python
+        vn.generate_questions()
+        ``` Generate a list OF questions that you can ask Vanna.AI. ?question? **Example:** ```python
+        vn.generate_summary("What are the top 10 customers by sales?", df)
+        ``` Generate a SUMMARY OF the results OF a SQL query. Args: question (STR): The question that was asked. df (pd.DataFrame): The results OF the SQL query. RETURNS: STR: The SUMMARY OF the results OF the SQL query. ?You ARE a helpful DATA assistant. The USER asked the question: ?\n\nThe FOLLOWING IS a pandas DataFrame WITH the results OF the query: \n{df.to_markdown()}\n\n---SQL_SEPARATOR---
+```[\w\s]*python\n([\s\S]*?)```|```([\s\S]*?)```?fig.show()?The FOLLOWING IS a pandas DataFrame that CONTAINS the results OF the query that answers the question the USER asked: ??The FOLLOWING IS a pandas DataFrame ?\n\nThe DataFrame was produced USING this query: {SQL}\n\n?The FOLLOWING IS information about the resulting pandas DataFrame ?: \n{df_metadata}?Can you generate the Python plotly code TO chart the results OF the dataframe? Assume the DATA IS IN a pandas dataframe CALLED ?. IF there IS ONLY one value IN the dataframe,
+                                                                                                                                                                                    USE an Indicator. Respond WITH ONLY Python code. DO NOT answer WITH ANY explanations -- just the code.---SQL_SEPARATOR---
+api_key?Missing api_key IN config?api_key?model?model?glm??https://open.bigmodel.cn/api/paas/v4/chat/completions?ROLE?SYSTEM?content?ROLE?USER?content?ROLE?assistant?content?\nYou may USE the FOLLOWING DDL statements AS a reference
+FOR what TABLES might be available. USE responses TO past questions also TO guide you:\n\n?{ddl}\n\n?\nYou may USE the FOLLOWING documentation AS a reference
+FOR what TABLES might be available. USE responses TO past questions also TO guide you:\n\n?{documentation}\n\n?\nYou may USE the FOLLOWING SQL statements AS a reference
+FOR what TABLES might be available. USE responses TO past questions also TO guide you:\n\n?SQL?{question[?]}\n{question[?]}\n\n?The USER provides a question
+AND you provide SQL. You will ONLY respond WITH SQL code
+AND NOT WITH ANY explanations.\n\nRespond WITH ONLY SQL code. DO NOT answer WITH ANY explanations -- just the code.\n---SQL_SEPARATOR---
+api_key?Missing api_key IN config?api_key?secret_key?Missing secret_key IN config?secret_key?temperature?temperature?max_tokens?max_tokens?model?model?ERNIE-Speed?ROLE?SYSTEM?content?ROLE?USER?content?ROLE?assistant?content? Example: ```python vn.get_sql_prompt( question=?,
+                                              question_sql_list=[{?: ?,
+                                                                              ?: "
+SELECT *
+FROM customers
+ORDER BY sales DESC
+LIMIT ?---SQL_SEPARATOR---
+api_key?config must contain a Mistral api_key?model?config must contain a Mistral model?api_key?model?ROLE?SYSTEM?content?ROLE?USER?content?ROLE?assistant?content?\_" WITH---SQL_SEPARATOR---
+api_key?sk-************?model?deepseek-chat?
+FOR DeepSeek,
+    config must be provided WITH an api_key
+AND model---SQL_SEPARATOR---
+cmetadata?id?document?documentation?doc?SQL?question?SQL?Skipping ROW WITH custom_id {custom_id} due TO parsing error.---SQL_SEPARATOR---
+command-a???temperature?temperature?model?model?COHERE_API_KEY?api_key?api_key?Cohere API KEY IS required. Please provide it via config
+OR
+SET the COHERE_API_KEY environment variable.") # Initialize client with validated API key
+ self.client = OpenAI( base_url=---SQL_SEPARATOR---
+config IS required?n_results?fastembed_model?BAAI/bge-small-en-v1??weaviate_api_key?weaviate_url?weaviate_port?weaviate_grpc?ADD proper credentials TO CONNECT TO weaviate?SQL?SQLTrainingDataEntry?ddl?DDLEntry?doc?DocumentationEntry?description?description?SQL?natural_language_question", data_type=wvc.config.DataType.TEXT), ] }
+FOR CLUSTER,
+    properties IN properties_dict.items(): IF NOT self.weaviate_client.collections.exists(CLUSTER): self.weaviate_client.collections.create(name=CLUSTER, properties=properties) def _initialize_weaviate_client(SELF): IF self.weaviate_api_key: RETURN weaviate.connect_to_wcs(cluster_url=self.weaviate_url, auth_credentials=weaviate.auth.AuthApiKey(self.weaviate_api_key), additional_config=weaviate.config.AdditionalConfig(timeout=(?, ?)), skip_init_checks=TRUE) ELSE: RETURN weaviate.connect_to_local(port=self.weaviate_port, grpc_port=self.weaviate_grpc_port, additional_config=weaviate.config.AdditionalConfig(timeout=(?, ?)), skip_init_checks=TRUE) def generate_embedding(SELF, DATA: STR, **kwargs): embedding_model = TextEmbedding(model_name=self.fastembed_model) embedding = next(embedding_model.embed(DATA)) RETURN embedding.tolist() def _insert_data(SELF, cluster_key: STR, data_object: dict, vector: list) -> STR: self.weaviate_client.connect() response = self.weaviate_client.collections.get(self.training_data_cluster[cluster_key]).data.insert(properties=data_object, vector=vector) self.weaviate_client.close() RETURN response def add_ddl(SELF, ddl: STR, **kwargs) -> STR: data_object = {---SQL_SEPARATOR---
+connection_string?A VALID ? DICTIONARY WITH a ? IS required.---SQL_SEPARATOR---
+connection_string?connection_string?n_results?embedding_function?embedding_function?ALL-MiniLM-L6-v2?SQL?ddl?documentation?question?SQL?-SQL?createdat?id?createdat?id?-ddl?id?id?-doc?id?id?SQL?ddl?documentation?Specified collection does NOT exist.?Please provide a SQL query.?Adding documentation: {documentation}?Adding ddl: {ddl}?
+SELECT cmetadata,
+       document
+FROM langchain_pg_embedding---SQL_SEPARATOR---
+ddl?-doc?Documentation WITH id: {id} already EXISTS IN the index. Skipping...---SQL_SEPARATOR---
+ddl_index: ? question_sql_index: ?settings?INDEX?number_of_shards?number_of_replicas?mappings?properties?question?TYPE?text?doc?TYPE?text?settings?INDEX?number_of_shards?number_of_replicas?mappings?properties?ddl?TYPE?text?doc?TYPE?text?settings?INDEX?number_of_shards?number_of_replicas?mappings?properties?question?TYPE?text?SQL?TYPE?text?es_document_index_settings?es_document_index_settings?es_ddl_index_settings?es_ddl_index_settings?es_question_sql_index_settings?es_question_sql_index_settings?es_urls?es_urls?es_host?es_host?localhost?es_port?es_port?es_ssl?es_ssl?es_verify_certs?es_verify_certs?es_user?es_user?es_password?es_encoded_base64?es_user?es_password?es_encoded_base64?es_user?:?es_password?utf??utf??es_headers?es_headers?es_timeout?es_timeout?es_max_retries?es_max_retries?es_http_compress?es_http_compress?OpenSearch_VectorStore initialized WITH es_urls:---SQL_SEPARATOR---
+document = { ?: id,
+                   ?: ddl,
+                               ?: ?,
+                                       ?: self.generate_embedding(ddl) } self.search_client.upload_documents(documents=[document]) RETURN id def add_documentation(SELF, doc: STR) -> STR: id = deterministic_uuid(doc) + ? document = { ?: id,
+                                                                                                                                                                                                                                                                    ?: doc,
+                                                                                                                                                                                                                                                                                ?: ?,
+                                                                                                                                                                                                                                                                                        ?: self.generate_embedding(doc) } self.search_client.upload_documents(documents=[document]) RETURN id def add_question_sql(SELF, question: STR, SQL: STR) -> STR: question_sql_json = json.dumps({?: question, ?: SQL}, ensure_ascii=FALSE) id = deterministic_uuid(question_sql_json) + ? document = { ?: id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ?: question_sql_json,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    ?: ?,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ?: self.generate_embedding(question_sql_json) } self.search_client.upload_documents(documents=[document]) RETURN id def get_related_ddl(SELF, text: STR) -> List[STR]: RESULT = [] vector_query = VectorizedQuery(vector=self.generate_embedding(text), fields=?) df = pd.DataFrame( self.search_client.search( top=self.n_results_ddl,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            vector_queries=[vector_query],
+SELECT=[---SQL_SEPARATOR---
+documentation?ddl?Skipping ROW WITH custom_id {custom_id} due TO unrecognized training DATA type.---SQL_SEPARATOR---
+documentation?question?SQL?-SQL?Question-SQL WITH id: {id} already EXISTS IN the index. Skipping...---SQL_SEPARATOR---
+embed-multilingual-v3??model?model?COHERE_API_KEY?api_key?api_key?Cohere API KEY IS required. Please provide it via config
+OR
+SET the COHERE_API_KEY environment variable.") # Initialize client with validated API key
+ self.client = OpenAI( base_url=---SQL_SEPARATOR---
+embedding_function", default_ef ) self.pre_delete_collection = config.get(---SQL_SEPARATOR---
+embedding_function?embedding_function?ALL-MiniLM-L6-v2?n_results_sql?n_results?n_results_documentation?n_results?n_results_ddl?n_results?es_document_index?vanna_document_index?es_ddl_index?vanna_ddl_index?es_question_sql_index?vanna_questions_sql_index?OpenSearch_Semantic_VectorStore initialized WITH document_index: {self.document_index}, ddl_index: {self.ddl_index}, question_sql_index: {self.question_sql_index}---SQL_SEPARATOR---
+es_urls?https://localhost:??es_ssl?es_verify_certs?es_user?es_user?es_password?es_headers?es_timeout?es_max_retries?opensearch_url?embedding_function?ENGINE?faiss?http_auth?use_ssl?verify_certs?timeout?max_retries?retry_on_timeout?headers?-ddl?-doc?question?SQL?-SQL?query?match_all?INDEX?TYPE?documentation?INDEX?TYPE?SQL?INDEX?TYPE?ddl?INDEX?TYPE?SQL?SQL?question?Skipping ROW WITH custom_id {hit[?]} due TO JSON parsing error: {e}---SQL_SEPARATOR---
+example IS NONE?question?SQL?question?SQL?ROLE?USER?content?The USER INITIALLY asked the question: ?: \n\n?Generate a List OF followup questions that the USER might ask about this data. Respond WITH a List OF questions,
+                                                                                                                       one per line. DO NOT answer WITH ANY explanations -- just the questions.---SQL_SEPARATOR---
+f? ) RETURN TRUE ELSE: logging.info(f"NO ROWS deleted
+FOR collection {collection_name}.---SQL_SEPARATOR---
+function_name = flask.request.json.get(?) RETURN jsonify({?: vn.delete_function(function_name=function_name)}) @self.flask_app.route(?, methods=["GET"]) @self.requires_auth @self.requires_cache(["df", "question", "sql"]) def generate_followup_questions(USER: ANY, id: STR, df, question, SQL):---SQL_SEPARATOR---
+https://ask.vanna.ai/rpc?endpoint?endpoint?https://functionrag.com/query?Content-TYPE?application/JSON?API-KEY?NAMESPACE?list_orgs?Content-TYPE?application/JSON?Vanna-KEY?Vanna-Org?Content-TYPE?application/JSON?Vanna-KEY?Vanna-Org?demo-tpc-h?METHOD?params? { get_all_sql_functions { function_name description post_processing_code_template arguments { name description general_type is_user_editable available_values } sql_template } } ?Query failed TO run BY RETURNING code OF {response.status_code}. {response.text}? query GetFunction($question: String!, $staticFunctionArguments: [StaticFunctionArgument]) { get_and_instantiate_function(question: $question, static_function_arguments: $staticFunctionArguments) { ... ON SQLFunction { function_name description post_processing_code_template instantiated_post_processing_code arguments { name description general_type is_user_editable instantiated_value available_values } sql_template instantiated_sql } } } ?name?value?question?staticFunctionArguments?Query failed TO run BY RETURNING code OF {response.status_code}. {response.text}? mutation CreateFunction($question: String!, $sql: String!, $plotly_code: String!) { generate_and_create_sql_function(question: $question, SQL: $sql, post_processing_code: $plotly_code) { function_name description arguments { name description general_type is_user_editable } sql_template post_processing_code_template } } ?question?SQL?plotly_code?Query failed TO run BY RETURNING code OF {response.status_code}. {response.text}") def update_function(SELF, old_function_name: STR, updated_function: dict) -> bool:---SQL_SEPARATOR---
+id??-ddl??-SQL??-SQL??-doc??-SQL?training_data_type?ddl?SQL?SQL?documentation?SQL?question?What ARE the top selling genres??What ARE the low ? artists BY sales??What IS the total sales
+FOR EACH customer??content?
+CREATE TABLE [Invoice]\n
+  (\n [InvoiceId] INTEGER NOT NULL,\n [CustomerId] INTEGER NOT NULL,\n [InvoiceDate] DATETIME NOT NULL,\n [BillingAddress] NVARCHAR(?),\n [BillingCity] NVARCHAR(?),\n [BillingState] NVARCHAR(?),\n [BillingCountry] NVARCHAR(?),\n [BillingPostalCode] NVARCHAR(?),\n [Total] NUMERIC(?, ?) NOT NULL,\n CONSTRAINT [PK_Invoice] PRIMARY KEY ([InvoiceId]),\n
+   FOREIGN KEY ([CustomerId]) REFERENCES [Customer] ([CustomerId]) \n\t\tON DELETE NO ACTION ON UPDATE NO ACTION\n)---SQL_SEPARATOR---
+id?question?content?training_data_type": training_data_type} ) # Create a DataFrame from the list of processed rows
+ df_processed = pd.DataFrame(processed_rows) RETURN df_processed def remove_training_data(SELF, id: STR, **kwargs) -> bool: # Create the database engine
+ ENGINE = create_engine(self.connection_string) # SQL DELETE statement
+ delete_statement = text(---SQL_SEPARATOR---
+marqo_url?marqo_url?http://localhost:??marqo_model?marqo_model?hf/all_datasets_v4_MiniLM-L6?vanna-SQL?vanna-ddl?vanna-doc?Marqo INDEX {INDEX} already EXISTS?-SQL?question?SQL?_id?vanna-SQL?question?SQL?-ddl?ddl?_id?vanna-ddl?ddl?-doc?doc?_id?vanna-doc?doc?vanna-doc?hits?id?_id?training_data_type?documentation?question?content?doc?vanna-ddl?hits?id?_id?training_data_type?ddl?question?content?ddl?vanna-SQL?hits?id?_id?training_data_type?SQL?question?question?content?SQL"], } ) df = pd.DataFrame(DATA) RETURN df def remove_training_data(SELF, id: STR, **kwargs) -> bool: IF id.endswith(---SQL_SEPARATOR---
+model_name_or_path?quantization_config?auto?ROLE?SYSTEM?content?ROLE?USER?content?ROLE?assistant?content? Extracts the FIRST SQL STATEMENT AFTER the word ?,
+                                                            ignoring CASE,
+                                                                     matches UNTIL the FIRST semicolon,
+                                                                                             three backticks,
+                                                                          OR the
+                                                                     END OF the string,
+AND removes three backticks IF they exist IN the extracted string. Args: - text (STR): The string TO SEARCH within
+FOR an SQL statement. RETURNS: - STR: The FIRST SQL STATEMENT FOUND, WITH three backticks removed,
+OR an empty string IF NO MATCH IS found.---SQL_SEPARATOR---
+n_results_sql?n_results?n_results_documentation?n_results?n_results_ddl?n_results?api_key?GOOGLE_API_KEY? IF Google api_key IS provided through config
+OR
+SET AS an environment VARIABLE,
+                      assign it. ?Configuring genai?GEMINI?api_key?VERTEX_AI?project_id?project_id?GOOGLE_CLOUD_PROJECT?Project ID IS NOT
+SET?{self.project_id}.{dataset_name}?Dataset {self.dataset_id} already EXISTS?US?Created dataset {self.dataset_id}?{self.dataset_id}.training_data?id?STRING?REQUIRED?training_data_type?STRING?REQUIRED?question?STRING?REQUIRED?content?STRING?REQUIRED?embedding?FLOAT64?REPEATED?created_at?TIMESTAMP?REQUIRED?TABLE {self.table_id} already EXISTS?Created TABLE {self.table_id}? # CREATE VECTOR INDEX IF NOT EXISTS my_index
+ # ON `{self.table_id}`(embedding)
+ # OPTIONS(
+ #     distance_type='COSINE',
+ #     index_type='IVF',
+ #     ivf_options='{{"num_lists": 1000}}'
+ # )
+ # """
+  # try:
+ #     self.conn.query(vector_index_query).result()  # Make an API request.
+ #     print(f"Vector index on {self.table_id} created or already exists")
+ # except Exception as e:
+ #     print(f"Failed to create vector index: {e}")
+  def store_training_data(SELF, training_data_type: STR, question: STR, content: STR, embedding: List[float], **kwargs) -> STR: id = str(uuid.uuid4()) created_at = datetime.datetime.now() self.conn.insert_rows_json(self.table_id, [{---SQL_SEPARATOR---
+old_function_name = flask.request.json.get(?) updated_function = flask.request.json.get(?) print(?, old_function_name) print(?, updated_function) updated = vn.update_function(old_function_name=old_function_name, updated_function=updated_function) RETURN jsonify({?: updated}) @self.flask_app.route(?, methods=["POST"]) @self.requires_auth def delete_function(USER: ANY):---SQL_SEPARATOR---
+ollama?You need TO install required dependencies TO EXECUTE this METHOD,
+                                                                   run command:? \npip install ollama?config must contain AT least Ollama model?config must contain AT least Ollama model?ollama_host?http://localhost:??model?:?:latest?ollama_timeout?ROLE?SYSTEM?content?ROLE?USER?content?ROLE?assistant?content? Extracts the FIRST SQL STATEMENT AFTER the word ?,
+                                                        ignoring CASE,
+                                                                 matches UNTIL the FIRST semicolon,
+                                                                                         three backticks,
+                                                                      OR the
+                                                                 END OF the string,
+AND removes three backticks IF they exist IN the extracted string. Args: - llm_response (STR): The string TO SEARCH within
+FOR an SQL statement. RETURNS: - STR: The FIRST SQL STATEMENT FOUND, WITH three backticks removed,
+OR an empty string IF NO MATCH IS found.---SQL_SEPARATOR---
+parsed = sqlparse.parse(SQL)
+FOR STATEMENT IN parsed: IF statement.get_type() == ?: RETURN TRUE RETURN FALSE def should_generate_chart(SELF, df: pd.DataFrame) -> bool:---SQL_SEPARATOR---
+temperature?temperature?model_name?model_name?gemini?-pro?api_key?GOOGLE_API_KEY? IF Google api_key IS provided through config
+OR
+SET AS an environment VARIABLE,
+                      assign it. ?api_key?google_credentials?JSON credentials FILE NOT FOUND AT: {json_file_path}") try: # Validate and set the JSON file path for GOOGLE_APPLICATION_CREDENTIALS
+ os.environ[?] = json_file_path # Initialize VertexAI with the credentials
+ credentials,
+ _ = google.auth.default() vertexai.init(credentials=credentials) self.chat_model = GenerativeModel(model_name)
+EXCEPT google.auth.exceptions.DefaultCredentialsError AS e: RAISE RuntimeError(f---SQL_SEPARATOR---
+vanna_document_index?vanna_ddl_index?vanna_questions_sql_index?es_document_index?es_document_index?es_ddl_index?es_ddl_index?es_question_sql_index?es_question_sql_index?OpenSearch_VectorStore initialized WITH document_index:---SQL_SEPARATOR---
+var Rn=Object.defineProperty;---SQL_SEPARATOR---
+vllm_host?http://localhost:??vllm_host?model?CHECK the config
+FOR vllm?model?auth-KEY?auth-KEY?temperature?temperature?ROLE?SYSTEM?content?ROLE?USER?content?ROLE?assistant?content? Extracts the FIRST SQL STATEMENT AFTER the word ?,
+                                                            ignoring CASE,
+                                                                     matches UNTIL the FIRST semicolon,
+                                                                                             three backticks,
+                                                                          OR the
+                                                                     END OF the string,
+AND removes three backticks IF they exist IN the extracted string. Args: - text (STR): The string TO SEARCH within
+FOR an SQL statement. RETURNS: - STR: The FIRST SQL STATEMENT FOUND, WITH three backticks removed,
+OR an empty string IF NO MATCH IS found.

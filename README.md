@@ -1,270 +1,115 @@
+# Vanna.AI Web 介面
 
+這是一個基於 Vanna.AI 和 Flask 的互動式 Web 應用程式，旨在簡化資料庫的自然語言查詢。它允許使用者輕鬆連接到各種資料庫，透過自然語言訓練文本到 SQL 的模型，並自動生成和執行 SQL 查詢，從而實現資料的快速洞察和分析。
 
-| GitHub | PyPI | Documentation | Gurubase |
-| ------ | ---- | ------------- | -------- |
-| [![GitHub](https://img.shields.io/badge/GitHub-vanna-blue?logo=github)](https://github.com/vanna-ai/vanna) | [![PyPI](https://img.shields.io/pypi/v/vanna?logo=pypi)](https://pypi.org/project/vanna/) | [![Documentation](https://img.shields.io/badge/Documentation-vanna-blue?logo=read-the-docs)](https://vanna.ai/docs/) | [![Gurubase](https://img.shields.io/badge/Gurubase-Ask%20Vanna%20Guru-006BFF)](https://gurubase.io/g/vanna) |
+## 特性
 
-# Vanna
-Vanna is an MIT-licensed open-source Python RAG (Retrieval-Augmented Generation) framework for SQL generation and related functionality.
+- **多種資料庫支援**: 透過 SQLAlchemy 輕鬆連接到 PostgreSQL、MySQL、MS SQL Server、SQLite 等多種資料庫。
+- **智慧型訓練資料管理**: 支援使用 DDL (資料定義語言)、資料庫文件和 SQL 問答對進行模型訓練，並自動管理訓練資料，避免重複。
+- **自動問題生成**: 利用 Vanna 的強大功能自動生成訓練用的問答對，加速模型訓練過程。
+- **知識圖譜視覺化**: 將資料庫 Schema 以直觀的知識圖譜形式展示，幫助使用者理解資料庫結構。
+- **自然語言查詢**: 允許使用者以自然語言提出業務問題，應用程式將自動生成並執行相應的 SQL 查詢，並顯示結果。
+- **Ollama 整合**: 支援使用 Ollama 進行本地大型語言模型 (LLM) 的整合，提供更靈活的部署選項。
+- **可擴展性**: 模組化設計，易於擴展和整合其他 Vanna 向量儲存和 LLM 服務。
 
-https://github.com/vanna-ai/vanna/assets/7146154/1901f47a-515d-4982-af50-f12761a3b2ce
+## 安裝
 
-![vanna-quadrants](https://github.com/vanna-ai/vanna/assets/7146154/1c7c88ba-c144-4ecf-a028-cf5ba7344ca2)
+1.  **克隆倉庫**:
+    ```bash
+    git clone https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git
+    cd YOUR_REPOSITORY
+    ```
+    請將 `YOUR_USERNAME` 和 `YOUR_REPOSITORY` 替換為您的實際 GitHub 用戶名和倉庫名稱。
 
-## How Vanna works
+2.  **創建並激活虛擬環境**:
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate
+    ```
 
-![Screen Recording 2024-01-24 at 11 21 37 AM](https://github.com/vanna-ai/vanna/assets/7146154/1d2718ad-12a8-4a76-afa2-c61754462f93)
+3.  **安裝依賴**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+    此命令將安裝所有必要的 Python 依賴項。
 
+## 配置
 
-Vanna works in two easy steps - train a RAG "model" on your data, and then ask questions which will return SQL queries that can be set up to automatically run on your database.
+1.  **複製 `.env.example` 文件並重命名為 `.env`**:
+    ```bash
+    cp .env.example .env
+    ```
+    然後編輯 `.env` 文件並填寫以下變量：
 
-1. **Train a RAG "model" on your data**.
-2. **Ask questions**.
+    ```
+    # Ollama LLM 配置 (可選，如果使用本地 LLM)
+    OLLAMA_HOST=http://localhost:11434
+    OLLAMA_MODEL=llama3
 
-![](img/vanna-readme-diagram.png)
+    # ChromaDB 集合名稱 (Vanna 預設向量儲存)
+    CHROMA_COLLECTION_NAME=my_vanna_collection
 
-If you don't know what RAG is, don't worry -- you don't need to know how this works under the hood to use it. You just need to know that you "train" a model, which stores some metadata and then use it to "ask" questions.
+    # 訓練資料 SQLite 資料庫路徑
+    TRAINING_DATA_DB_PATH=./training_data_qa.db
+    ```
+    請根據您的實際環境修改這些配置。如果您不使用 Ollama，可以將相關行註釋掉或留空。
 
-See the [base class](https://github.com/vanna-ai/vanna/blob/main/src/vanna/base/base.py) for more details on how this works under the hood.
+2.  **確保 Ollama 正在運行** (如果使用)。
 
-## User Interfaces
-These are some of the user interfaces that we've built using Vanna. You can use these as-is or as a starting point for your own custom interface.
+## 運行應用程式
 
-- [Jupyter Notebook](https://vanna.ai/docs/postgres-openai-vanna-vannadb/)
-- [vanna-ai/vanna-streamlit](https://github.com/vanna-ai/vanna-streamlit)
-- [vanna-ai/vanna-flask](https://github.com/vanna-ai/vanna-flask)
-- [vanna-ai/vanna-slack](https://github.com/vanna-ai/vanna-slack)
-
-## Supported LLMs
-
-- [OpenAI](https://github.com/vanna-ai/vanna/tree/main/src/vanna/openai)
-- [Anthropic](https://github.com/vanna-ai/vanna/tree/main/src/vanna/anthropic)
-- [Gemini](https://github.com/vanna-ai/vanna/blob/main/src/vanna/google/gemini_chat.py)
-- [HuggingFace](https://github.com/vanna-ai/vanna/blob/main/src/vanna/hf/hf.py)
-- [AWS Bedrock](https://github.com/vanna-ai/vanna/tree/main/src/vanna/bedrock)
-- [Ollama](https://github.com/vanna-ai/vanna/tree/main/src/vanna/ollama)
-- [Qianwen](https://github.com/vanna-ai/vanna/tree/main/src/vanna/qianwen)
-- [Qianfan](https://github.com/vanna-ai/vanna/tree/main/src/vanna/qianfan)
-- [Zhipu](https://github.com/vanna-ai/vanna/tree/main/src/vanna/ZhipuAI)
-
-## Supported VectorStores
-
-- [AzureSearch](https://github.com/vanna-ai/vanna/tree/main/src/vanna/azuresearch)
-- [Opensearch](https://github.com/vanna-ai/vanna/tree/main/src/vanna/opensearch)
-- [PgVector](https://github.com/vanna-ai/vanna/tree/main/src/vanna/pgvector)
-- [PineCone](https://github.com/vanna-ai/vanna/tree/main/src/vanna/pinecone)
-- [ChromaDB](https://github.com/vanna-ai/vanna/tree/main/src/vanna/chromadb)
-- [FAISS](https://github.com/vanna-ai/vanna/tree/main/src/vanna/faiss)
-- [Marqo](https://github.com/vanna-ai/vanna/tree/main/src/vanna/marqo)
-- [Milvus](https://github.com/vanna-ai/vanna/tree/main/src/vanna/milvus)
-- [Qdrant](https://github.com/vanna-ai/vanna/tree/main/src/vanna/qdrant)
-- [Weaviate](https://github.com/vanna-ai/vanna/tree/main/src/vanna/weaviate)
-- [Oracle](https://github.com/vanna-ai/vanna/tree/main/src/vanna/oracle)
-
-## Supported Databases
-
-- [PostgreSQL](https://www.postgresql.org/)
-- [MySQL](https://www.mysql.com/)
-- [PrestoDB](https://prestodb.io/)
-- [Apache Hive](https://hive.apache.org/)
-- [ClickHouse](https://clickhouse.com/)
-- [Snowflake](https://www.snowflake.com/en/)
-- [Oracle](https://www.oracle.com/)
-- [Microsoft SQL Server](https://www.microsoft.com/en-us/sql-server/sql-server-downloads)
-- [BigQuery](https://cloud.google.com/bigquery)
-- [SQLite](https://www.sqlite.org/)
-- [DuckDB](https://duckdb.org/)
-
-
-## Getting started
-See the [documentation](https://vanna.ai/docs/) for specifics on your desired database, LLM, etc.
-
-If you want to get a feel for how it works after training, you can try this [Colab notebook](https://vanna.ai/docs/app/).
-
-
-### Install
 ```bash
-pip install vanna
+python app.py
 ```
 
-There are a number of optional packages that can be installed so see the [documentation](https://vanna.ai/docs/) for more details.
+然後在您的瀏覽器中打開 `http://127.0.0.1:5001`。
 
-### Import
-See the [documentation](https://vanna.ai/docs/) if you're customizing the LLM or vector database.
+## 使用指南
 
-```python
-# The import statement will vary depending on your LLM and vector database. This is an example for OpenAI + ChromaDB
+這個 Web 介面提供了一個直觀的方式來與 Vanna.AI 互動。以下是主要的操作流程：
 
-from vanna.openai.openai_chat import OpenAI_Chat
-from vanna.chromadb.chromadb_vector import ChromaDB_VectorStore
+1.  **連接資料庫**:
+    *   在網頁介面的「1. 連接到資料庫」部分，您需要輸入您的資料庫連接資訊。這通常是一個連接字串，例如：
+        *   SQLite: `sqlite:///./my_database.db`
+        *   PostgreSQL: `postgresql://user:password@host:port/database`
+        *   MySQL: `mysql+mysqlconnector://user:password@host:port/database`
+        *   MS SQL Server: `mssql+pyodbc://user:password@host:port/database?driver=ODBC+Driver+17+for+SQL+Server`
+    *   填寫完畢後，點擊「連接」按鈕。
+    *   成功連接後，應用程式將會自動提取資料庫的 DDL (資料定義語言)，並顯示在「DDL 陳述式」文本框中。這些 DDL 將用於訓練 Vanna 模型，幫助它理解資料庫結構。
 
-class MyVanna(ChromaDB_VectorStore, OpenAI_Chat):
-    def __init__(self, config=None):
-        ChromaDB_VectorStore.__init__(self, config=config)
-        OpenAI_Chat.__init__(self, config=config)
+2.  **訓練模型**:
+    Vanna 模型需要訓練資料來學習如何將自然語言問題轉換為 SQL 查詢。您可以透過以下幾種方式提供訓練資料：
+    *   **手動添加 DDL**: 在「DDL 陳述式」文本框中輸入或修改 DDL 語句。
+    *   **手動添加文件**: 在「文件」文本框中輸入與資料庫相關的說明或業務邏輯。
+    *   **手動添加問答對 (QA)**: 在「問答對」部分，您可以輸入一個自然語言問題和對應的 SQL 查詢。
+    *   **自動生成問題**: 點擊「自動生成問題」按鈕，Vanna 將利用其智慧功能，根據您的資料庫 Schema 自動創建新的問答對。這些問答對將自動提交給模型進行訓練，以豐富模型的知識庫。
+    *   **提交訓練數據**: 在輸入或生成任何訓練數據後，點擊「訓練模型」按鈕。所有提供的訓練數據將被提交給 Vanna 模型進行學習。
+    *   **避免重複訓練**: 應用程式會自動檢查並跳過已存在的 DDL 和文件訓練，確保訓練效率。
 
-vn = MyVanna(config={'api_key': 'sk-...', 'model': 'gpt-4-...'})
+3.  **查看訓練資料**:
+    *   您可以點擊「獲取訓練資料」按鈕來查看當前 Vanna 模型中已有的訓練數據。這將顯示所有已訓練的 DDL、文件和問答對。
 
-# See the documentation for other options
+4.  **提出問題**:
+    *   在「提出問題」部分的文本框中，輸入您的自然語言業務問題。例如：「顯示每個城市的總銷售額」。
+    *   點擊「提問」按鈕。
+    *   應用程式將利用訓練好的 Vanna 模型生成相應的 SQL 查詢，並在下方顯示查詢結果。
 
-```
+5.  **管理問答對**:
+    *   **更新問答對**: 如果您想修改已有的問答對，可以在「問答對」部分進行編輯，然後點擊「更新問答對」。
+    *   **添加問答對**: 您也可以直接在「問答對」部分添加新的問題和 SQL 查詢，然後點擊「添加問答對」。
+    *   **重新生成問題**: 如果您對自動生成的問題不滿意，可以點擊「重新生成問題」來獲取新的建議。
 
+## 故障排除
 
-## Training
-You may or may not need to run these `vn.train` commands depending on your use case. See the [documentation](https://vanna.ai/docs/) for more details.
+- **Ollama 連接問題**: 確保 Ollama 服務正在運行，並且 `.env` 文件中的 `OLLAMA_HOST` 和 `OLLAMA_MODEL` 配置正確。
+- **資料庫連接錯誤**: 檢查您在應用程式中輸入的資料庫連接字串是否正確，以及資料庫服務是否可訪問。
+- **重複訓練訊息**: 應用程式已實作機制避免重複訓練 DDL 和文件。如果仍然看到重複訊息，請檢查 `training_data_qa.db` 檔案的完整性。
+- **SQL 語法錯誤**: 如果生成的 SQL 查詢出現語法錯誤，請嘗試提供更清晰的自然語言問題，或手動修正 DDL 和文件中的錯誤。
 
-These statements are shown to give you a feel for how it works.
+## 貢獻
 
-### Train with DDL Statements
-DDL statements contain information about the table names, columns, data types, and relationships in your database.
+歡迎對此專案做出貢獻！請隨時提交問題或拉取請求。
 
-```python
-vn.train(ddl="""
-    CREATE TABLE IF NOT EXISTS my-table (
-        id INT PRIMARY KEY,
-        name VARCHAR(100),
-        age INT
-    )
-""")
-```
+## 許可證
 
-### Train with Documentation
-Sometimes you may want to add documentation about your business terminology or definitions.
-
-```python
-vn.train(documentation="Our business defines XYZ as ...")
-```
-
-### Train with SQL
-You can also add SQL queries to your training data. This is useful if you have some queries already laying around. You can just copy and paste those from your editor to begin generating new SQL.
-
-```python
-vn.train(sql="SELECT name, age FROM my-table WHERE name = 'John Doe'")
-```
-
-
-## Asking questions
-```python
-vn.ask("What are the top 10 customers by sales?")
-```
-
-You'll get SQL
-```sql
-SELECT c.c_name as customer_name,
-        sum(l.l_extendedprice * (1 - l.l_discount)) as total_sales
-FROM   snowflake_sample_data.tpch_sf1.lineitem l join snowflake_sample_data.tpch_sf1.orders o
-        ON l.l_orderkey = o.o_orderkey join snowflake_sample_data.tpch_sf1.customer c
-        ON o.o_custkey = c.c_custkey
-GROUP BY customer_name
-ORDER BY total_sales desc limit 10;
-```
-
-If you've connected to a database, you'll get the table:
-<div>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>CUSTOMER_NAME</th>
-      <th>TOTAL_SALES</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>0</th>
-      <td>Customer#000143500</td>
-      <td>6757566.0218</td>
-    </tr>
-    <tr>
-      <th>1</th>
-      <td>Customer#000095257</td>
-      <td>6294115.3340</td>
-    </tr>
-    <tr>
-      <th>2</th>
-      <td>Customer#000087115</td>
-      <td>6184649.5176</td>
-    </tr>
-    <tr>
-      <th>3</th>
-      <td>Customer#000131113</td>
-      <td>6080943.8305</td>
-    </tr>
-    <tr>
-      <th>4</th>
-      <td>Customer#000134380</td>
-      <td>6075141.9635</td>
-    </tr>
-    <tr>
-      <th>5</th>
-      <td>Customer#000103834</td>
-      <td>6059770.3232</td>
-    </tr>
-    <tr>
-      <th>6</th>
-      <td>Customer#000069682</td>
-      <td>6057779.0348</td>
-    </tr>
-    <tr>
-      <th>7</th>
-      <td>Customer#000102022</td>
-      <td>6039653.6335</td>
-    </tr>
-    <tr>
-      <th>8</th>
-      <td>Customer#000098587</td>
-      <td>6027021.5855</td>
-    </tr>
-    <tr>
-      <th>9</th>
-      <td>Customer#000064660</td>
-      <td>5905659.6159</td>
-    </tr>
-  </tbody>
-</table>
-</div>
-
-You'll also get an automated Plotly chart:
-![](img/top-10-customers.png)
-
-## RAG vs. Fine-Tuning
-RAG
-- Portable across LLMs
-- Easy to remove training data if any of it becomes obsolete
-- Much cheaper to run than fine-tuning
-- More future-proof -- if a better LLM comes out, you can just swap it out
-
-Fine-Tuning
-- Good if you need to minimize tokens in the prompt
-- Slow to get started
-- Expensive to train and run (generally)
-
-## Why Vanna?
-
-1. **High accuracy on complex datasets.**
-    - Vanna’s capabilities are tied to the training data you give it
-    - More training data means better accuracy for large and complex datasets
-2. **Secure and private.**
-    - Your database contents are never sent to the LLM or the vector database
-    - SQL execution happens in your local environment
-3. **Self learning.**
-    - If using via Jupyter, you can choose to "auto-train" it on the queries that were successfully executed
-    - If using via other interfaces, you can have the interface prompt the user to provide feedback on the results
-    - Correct question to SQL pairs are stored for future reference and make the future results more accurate
-4. **Supports any SQL database.**
-    - The package allows you to connect to any SQL database that you can otherwise connect to with Python
-5. **Choose your front end.**
-    - Most people start in a Jupyter Notebook.
-    - Expose to your end users via Slackbot, web app, Streamlit app, or a custom front end.
-
-## Extending Vanna
-Vanna is designed to connect to any database, LLM, and vector database. There's a [VannaBase](https://github.com/vanna-ai/vanna/blob/main/src/vanna/base/base.py) abstract base class that defines some basic functionality. The package provides implementations for use with OpenAI and ChromaDB. You can easily extend Vanna to use your own LLM or vector database. See the [documentation](https://vanna.ai/docs/) for more details.
-
-## Vanna in 100 Seconds
-
-https://github.com/vanna-ai/vanna/assets/7146154/eb90ee1e-aa05-4740-891a-4fc10e611cab
-
-## More resources
- - [Full Documentation](https://vanna.ai/docs/)
- - [Website](https://vanna.ai)
- - [Discord group for support](https://discord.gg/qUZYKHremx)
+此專案根據 MIT 許可證發布。詳情請參閱 `LICENSE` 文件。
