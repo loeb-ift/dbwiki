@@ -163,14 +163,40 @@ class ChromaDB_VectorStore(VannaBase):
         return df
 
     def remove_training_data(self, id: str, **kwargs) -> bool:
+        if id is None:
+            try:
+                # Clear all collections by deleting and recreating them
+                if self.sql_collection:
+                    self.chroma_client.delete_collection(name=self.sql_collection.name)
+                    self.sql_collection = self.chroma_client.get_or_create_collection(
+                        name="sql",
+                        embedding_function=self.embedding_function,
+                    )
+                if self.ddl_collection:
+                    self.chroma_client.delete_collection(name=self.ddl_collection.name)
+                    self.ddl_collection = self.chroma_client.get_or_create_collection(
+                        name="ddl",
+                        embedding_function=self.embedding_function,
+                    )
+                if self.documentation_collection:
+                    self.chroma_client.delete_collection(name=self.documentation_collection.name)
+                    self.documentation_collection = self.chroma_client.get_or_create_collection(
+                        name="documentation",
+                        embedding_function=self.embedding_function,
+                    )
+                return True
+            except Exception as e:
+                print(f"Error clearing all training data: {e}")
+                return False
+
         if id.endswith("-sql"):
-            self.sql_collection.delete(ids=id)
+            self.sql_collection.delete(ids=[id])
             return True
         elif id.endswith("-ddl"):
-            self.ddl_collection.delete(ids=id)
+            self.ddl_collection.delete(ids=[id])
             return True
         elif id.endswith("-doc"):
-            self.documentation_collection.delete(ids=id)
+            self.documentation_collection.delete(ids=[id])
             return True
         else:
             return False

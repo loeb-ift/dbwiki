@@ -132,6 +132,7 @@
             <textarea id="ddl-input" placeholder="激活資料集後，DDL 將顯示於此..."></textarea>
             <br>
             <input type="file" id="ddl-file-input" accept=".sql">
+            <button type="button" onclick="saveDdl()" style="margin-left: 10px;">儲存 DDL</button>
             <br><br>
 
             <h3><input type="checkbox" id="train-doc-checkbox" checked> b. 資料的知識背景文件</h3>
@@ -139,6 +140,7 @@
             <textarea id="doc-input" placeholder="例如：&#10;The 'customers' table contains all registered users. 'id' is the unique identifier for each customer."></textarea>
             <br>
             <input type="file" id="doc-file-input" accept=".txt,.md">
+            <button type="button" onclick="saveDocumentation()" style="margin-left: 10px;">儲存文件</button>
             <br><br>
 
             <h3><input type="checkbox" id="train-qa-checkbox" checked> c. SQL 問答配對</h3>
@@ -174,6 +176,10 @@
             <div id="train-progress-container" class="progress-container" style="display: none;">
                 <div class="progress-bar"></div>
                 <span class="progress-text"></span>
+            </div>
+            <div id="training-log-container" style="margin-top: 1em; display: none;">
+                <h4>訓練日誌：</h4>
+                <pre id="training-log" style="background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap;"></pre>
             </div>
         </div>
 
@@ -350,7 +356,7 @@
                     document.getElementById('correction-rules-section').style.display = 'block';
 
                     renderDatasets();
-                    loadInitialData(datasetId);
+                    loadInitialData(datasetId); // Re-add this call
                     checkTrainingStatus(); // Re-check status after activating
                 } else {
                     throw new Error(result.message);
@@ -403,20 +409,25 @@
 
         async function loadInitialData(datasetId) {
             if (!datasetId) {
-                document.getElementById('doc-input').value = '';
-                fullQaData = [];
-                renderQaTable();
+                clearTrainingInputs();
                 return;
             }
 
             try {
-                const response = await fetch(`/api/training_data/${datasetId}`); 
+                const response = await fetch(`/api/training_data`); 
                 const data = await response.json();
 
                 if (!response.ok) {
                     throw new Error(data.message || 'Failed to load training data.');
                 }
                 
+                const ddlInput = document.getElementById('ddl-input');
+                // Only populate DDL if the textarea is currently empty.
+                if (data.ddl && data.ddl.length > 0 && ddlInput.value.trim() === '') {
+                    ddlInput.value = data.ddl.join('\n\n');
+                }
+
+                // Load documentation
                 const docInput = document.getElementById('doc-input');
                 if (data.documentation && data.documentation.length > 0) {
                     docInput.value = data.documentation.join('\n\n');
@@ -424,6 +435,7 @@
                     docInput.value = '';
                 }
 
+                // Load QA pairs
                 fullQaData = data.qa_pairs || [];
                 currentPage = 1;
                 renderQaTable();
@@ -639,24 +651,11 @@
             const progressContainer = document.getElementById('train-progress-container');
             const progressBar = progressContainer.querySelector('.progress-bar');
             const progressText = progressContainer.querySelector('.progress-text');
-            const formData = new FormData();
+            const logContainer = document.getElementById('training-log-container');
+            const logOutput = document.getElementById('training-log');
 
-            if (document.getElementById('train-ddl-checkbox').checked) {
-                const ddl = document.getElementById('ddl-input').value;
-                if (ddl) formData.append('ddl', ddl);
-            }
-            if (document.getElementById('train-doc-checkbox').checked) {
-                const docText = document.getElementById('doc-input').value;
-                const docFile = document.getElementById('doc-file-input').files[0];
-                if (docText) formData.append('documentation', docText);
-                if (docFile) formData.append('doc_file', docFile);
-            }
-            if (document.getElementById('train-qa-checkbox').checked) {
-                if (fullQaData.length > 0) formData.append('qa_pairs', JSON.stringify(fullQaData));
-            }
-
-            if (formData.entries().next().done) {
-                alert('請至少提供一種要訓練的資料。');
+            if (!activeDatasetId) {
+                alert('請先激活一個資料集才能開始訓練。');
                 return;
             }
 
@@ -664,12 +663,18 @@
             trainBtn.textContent = '訓練中...';
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
-            progressText.textContent = '正在開始訓練...';
+            progressText.textContent = '正在準備...';
+            logContainer.style.display = 'block';
+            logOutput.textContent = '';
+
+            function addLog(message) {
+                logOutput.textContent += message + '\n';
+                logOutput.scrollTop = logOutput.scrollHeight;
+            }
 
             try {
                 const response = await fetch('/api/train', {
                     method: 'POST',
-                    body: formData
                 });
 
                 if (!response.ok) {
@@ -684,10 +689,10 @@
                 while (true) {
                     const { value, done } = await reader.read();
                     if (done) {
+                        addLog('✅ 訓練流程已完成。');
                         progressBar.style.width = '100%';
                         progressText.textContent = '完成！';
                         alert('模型訓練成功！');
-                        loadInitialData(activeDatasetId);
                         break;
                     }
                     
@@ -701,24 +706,30 @@
                             if (jsonString) {
                                 try {
                                     const data = JSON.parse(jsonString);
-                                    if (data.percentage !== undefined && data.message !== undefined) {
+                                    if (data.percentage !== undefined && data.message) {
                                         progressBar.style.width = data.percentage + '%';
                                         progressText.textContent = `${data.message} (${Math.round(data.percentage)}%)`;
+                                        addLog(`[${Math.round(data.percentage)}%] ${data.message}`);
+                                    }
+                                    if (data.status === 'completed') {
+                                        // Final message is handled in the 'done' block
                                     }
                                 } catch (e) {
                                     console.error("Error parsing stream JSON:", e, "JSON string:", jsonString);
+                                    addLog(`[錯誤] 無法解析日誌訊息: ${jsonString}`);
                                 }
                             }
                         }
                     }
                 }
             } catch (error) {
-                alert('訓練失敗：' + error.message);
+                const errorMessage = '訓練失敗：' + error.message;
+                alert(errorMessage);
+                addLog(`❌ ${errorMessage}`);
             } finally {
                 trainBtn.disabled = false;
                 trainBtn.textContent = '重新訓練模型';
-                document.getElementById('training-info-text').textContent = '您可以隨時提交新的資料來優化模型。';
-                progressContainer.style.display = 'none';
+                progressText.textContent = '完成';
             }
         }
 
@@ -1036,6 +1047,58 @@
                 }
             } catch (error) {
                 console.error('Error checking training status:', error);
+            }
+        }
+
+        async function saveDdl() {
+            if (!activeDatasetId) {
+                alert('請先激活一個資料集。');
+                return;
+            }
+            const ddlContent = document.getElementById('ddl-input').value;
+            if (!ddlContent.trim()) {
+                alert('DDL 內容不能為空。');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/save_ddl', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ddl: ddlContent })
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    alert('DDL 已成功儲存！');
+                } else {
+                    throw new Error(result.message || '儲存失敗。');
+                }
+            } catch (error) {
+                alert('儲存 DDL 時發生錯誤：' + error.message);
+            }
+        }
+
+        async function saveDocumentation() {
+            if (!activeDatasetId) {
+                alert('請先激活一個資料集。');
+                return;
+            }
+            const docContent = document.getElementById('doc-input').value;
+
+            try {
+                const response = await fetch('/api/save_documentation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ documentation: docContent })
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    alert('文件已成功儲存！');
+                } else {
+                    throw new Error(result.message || '儲存失敗。');
+                }
+            } catch (error) {
+                alert('儲存文件時發生錯誤：' + error.message);
             }
         }
 
