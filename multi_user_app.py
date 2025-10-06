@@ -214,7 +214,11 @@ def activate_dataset():
 def get_training_data():
     user_id = session['username']
     table_name = request.args.get('table_name', 'global')
+    page = int(request.args.get('page', 1))
+    page_size = 10  # Fixed page size
+    offset = (page - 1) * page_size
     dataset_id = session.get('active_dataset_id')
+
     if not dataset_id:
         return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
 
@@ -222,21 +226,40 @@ def get_training_data():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        cursor.execute("SELECT documentation_text FROM training_documentation WHERE table_name = ? AND (dataset_id = ? OR dataset_id IS NULL)", (table_name, dataset_id))
+        # Get documentation
+        cursor.execute("SELECT documentation_text FROM training_documentation WHERE table_name = ? AND dataset_id = ?", (table_name, dataset_id))
         doc_row = cursor.fetchone()
         documentation = doc_row['documentation_text'] if doc_row else ""
         
-        cursor.execute("SELECT id, question, sql_query as sql FROM training_qa WHERE table_name = ? AND (dataset_id = ? OR dataset_id IS NULL) ORDER BY created_at DESC", (table_name, dataset_id))
+        # Get total count for pagination
+        cursor.execute("SELECT COUNT(*) FROM training_qa WHERE table_name = ? AND dataset_id = ?", (table_name, dataset_id))
+        total_count = cursor.fetchone()[0]
+        total_pages = (total_count + page_size - 1) // page_size
+
+        # Get paginated QA pairs
+        cursor.execute("""
+            SELECT id, question, sql_query as sql
+            FROM training_qa
+            WHERE table_name = ? AND dataset_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (table_name, dataset_id, page_size, offset))
         qa_pairs = [dict(row) for row in cursor.fetchall()]
         
+        # Get dataset analysis
         cursor.execute("SELECT documentation_text FROM training_documentation WHERE table_name = ? AND dataset_id = ?", ('__dataset_analysis__', dataset_id))
         analysis_row = cursor.fetchone()
         dataset_analysis = analysis_row['documentation_text'] if analysis_row else ""
 
     return jsonify({
-        'documentation': documentation, 
+        'documentation': documentation,
         'qa_pairs': qa_pairs,
-        'dataset_analysis': dataset_analysis
+        'dataset_analysis': dataset_analysis,
+        'pagination': {
+            'current_page': page,
+            'total_pages': total_pages,
+            'total_count': total_count
+        }
     })
 
 @app.route('/api/save_documentation', methods=['POST'])

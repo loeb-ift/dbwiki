@@ -22,7 +22,7 @@
         th { background-color: #f2f2f2; }
         td textarea { width: 98%; height: 80px; border: 1px solid #eee; }
         td pre { white-space: pre-wrap; background-color: #f8f8f8; padding: 5px; margin: 0; }
-        #training-log, #qa-gen-log, #thinking-output, #sql-output, #result-output { background-color: #282c34; color: #abb2bf; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; border-radius: 4px; }
+        #training-log, #qa-gen-log, #thinking-output, #sql-output, #result-output, #schema-analysis-output, #documentation-output { background-color: #282c34; color: #abb2bf; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; border-radius: 4px; }
         .modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background-color:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center; }
         .modal-content { background:white; padding:2em; border-radius:5px; width:500px; }
     </style>
@@ -70,6 +70,7 @@
                 </table>
                 <button type="button" onclick="addQaPairRow()">+ 新增問答</button>
                 <button id="save-all-qa-btn" type="button" onclick="saveAllQaModifications()" style="margin-left: 10px;">儲存所有修改</button>
+                <div id="qa-pagination-controls" style="margin-top: 1em; text-align: center;"></div>
                 <div class="form-group" style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
                     <label for="qa-file-input">或上傳檔案生成 (.sql):</label>
                     <input type="file" id="qa-file-input" accept=".sql" onchange="handleQaFileUpload(event)">
@@ -117,7 +118,6 @@
                 <div id="sql-container" style="display: none;">
                     <h3>生成的 SQL：</h3>
                     <pre id="sql-output"></pre>
-                    <button id="execute-sql-button" onclick="executeSql()" style="display: none;">執行 SQL</button>
                 </div>
                 <div id="result-container" style="display: none;">
                     <h3>查詢結果：</h3>

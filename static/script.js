@@ -105,7 +105,7 @@ function populateTableSelector() {
     activeTable = 'global';
 }
 
-async function loadTrainingDataForTable(tableName) {
+async function loadTrainingDataForTable(tableName, page = 1) {
     if (!activeDatasetId || !tableName) return;
     
     activeTable = tableName;
@@ -118,11 +118,12 @@ async function loadTrainingDataForTable(tableName) {
             ddlInput.value = fullDdlMap[tableName] || `/* 找不到資料表 "${tableName}" 的 DDL。 */`;
         }
         
-        const data = await apiFetch(`/api/training_data?table_name=${encodeURIComponent(tableName)}`);
+        const data = await apiFetch(`/api/training_data?table_name=${encodeURIComponent(tableName)}&page=${page}`);
         document.getElementById('doc-input').value = data.documentation || '';
         currentQaData = Array.isArray(data.qa_pairs) ? data.qa_pairs : [];
         
         renderQaTable();
+        renderPaginationControls(data.pagination);
 
         const docSection = document.getElementById('documentation-output-section');
         const docOutput = document.getElementById('documentation-output');
@@ -136,6 +137,35 @@ async function loadTrainingDataForTable(tableName) {
         console.error(`加載訓練數據失敗 (${tableName}):`, error);
         alert(`加載訓練數據失敗: ${error.message}`);
     }
+}
+
+function renderPaginationControls(pagination) {
+    const controlsContainer = document.getElementById('qa-pagination-controls');
+    if (!controlsContainer) return;
+    controlsContainer.innerHTML = '';
+
+    if (!pagination || pagination.total_pages <= 1) {
+        return;
+    }
+
+    const { current_page, total_pages } = pagination;
+
+    const prevButton = document.createElement('button');
+    prevButton.textContent = '« 上一頁';
+    prevButton.disabled = current_page === 1;
+    prevButton.onclick = () => loadTrainingDataForTable(activeTable, current_page - 1);
+    controlsContainer.appendChild(prevButton);
+
+    const pageInfo = document.createElement('span');
+    pageInfo.textContent = ` 第 ${current_page} / ${total_pages} 頁 `;
+    pageInfo.style.margin = '0 1em';
+    controlsContainer.appendChild(pageInfo);
+
+    const nextButton = document.createElement('button');
+    nextButton.textContent = '下一頁 »';
+    nextButton.disabled = current_page === total_pages;
+    nextButton.onclick = () => loadTrainingDataForTable(activeTable, current_page + 1);
+    controlsContainer.appendChild(nextButton);
 }
 
 async function saveDocumentation() {
@@ -348,6 +378,7 @@ async function trainModel() {
         
         alert('模型訓練成功！');
         document.getElementById('ask-section').style.display = 'block';
+        analyzeSchema(); // Automatically trigger schema analysis after successful training
         
     } catch (error) {
         const errorMessage = '訓練失敗：' + error.message;
