@@ -12,13 +12,16 @@ import time
 from dotenv import load_dotenv
 import pandas as pd
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import DatabaseError
+from sqlalchemy.exc import DatabaseError, OperationalError
+from queue import Queue
+from threading import Thread
 
 # Add 'src' to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
 
 from vanna.ollama import Ollama
 from vanna.chromadb import ChromaDB_VectorStore
+from vanna.types import TrainingPlan
 
 # --- App Setup ---
 load_dotenv()
@@ -38,18 +41,6 @@ def get_user_db_connection(user_id: str) -> sqlite3.Connection:
     db_path = get_user_db_path(user_id)
     return sqlite3.connect(db_path)
 
-def _save_single_entry_data(user_id: str, table: str, column: str, content: str):
-    db_path = get_user_db_path(user_id)
-    if not os.path.exists(db_path):
-        raise FileNotFoundError("User database not found.")
-    
-    with get_user_db_connection(user_id) as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"DELETE FROM {table}")
-        if content and content.strip():
-            cursor.execute(f"INSERT INTO {table} ({column}) VALUES (?)", (content,))
-        conn.commit()
-
 # --- Decorators ---
 def api_login_required(f):
     @wraps(f)
@@ -66,48 +57,69 @@ def init_training_db(user_id: str):
             cursor = conn.cursor()
             tables = {
                 "training_ddl": "(id INTEGER PRIMARY KEY AUTOINCREMENT, ddl_statement TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
-                "training_documentation": "(id INTEGER PRIMARY KEY AUTOINCREMENT, documentation_text TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
-                "training_qa": "(id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT NOT NULL, sql_query TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+                "training_documentation": "(id INTEGER PRIMARY KEY AUTOINCREMENT, documentation_text TEXT NOT NULL, table_name TEXT, dataset_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(dataset_id, table_name))",
+                "training_qa": "(id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT NOT NULL, sql_query TEXT NOT NULL, table_name TEXT, dataset_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
                 "datasets": "(id INTEGER PRIMARY KEY AUTOINCREMENT, dataset_name TEXT NOT NULL, db_path TEXT NOT NULL UNIQUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
                 "correction_rules": "(id INTEGER PRIMARY KEY AUTOINCREMENT, incorrect_name TEXT NOT NULL UNIQUE, correct_name TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
             }
             for table_name, schema in tables.items():
                 cursor.execute(f"CREATE TABLE IF NOT EXISTS {table_name} {schema};")
+            
+            def add_column_if_not_exists(table, column, col_type):
+                cursor.execute(f"PRAGMA table_info({table})")
+                if column not in [info[1] for info in cursor.fetchall()]:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+            
+            add_column_if_not_exists('training_documentation', 'dataset_id', 'TEXT')
+            add_column_if_not_exists('training_qa', 'dataset_id', 'TEXT')
+            
             conn.commit()
-        app.logger.info(f"Training database for user '{user_id}' initialized successfully.")
     except sqlite3.Error as e:
-        app.logger.error(f"Could not initialize training database for user '{user_id}': {e}")
+        app.logger.error(f"Could not initialize/update training database for user '{user_id}': {e}")
         raise
 
 # --- Vanna AI Integration ---
 class MyVanna(Ollama, ChromaDB_VectorStore):
     def __init__(self, user_id: str, config=None):
+        self.log_queue = Queue()
         model = os.getenv('OLLAMA_MODEL')
-        if not model:
-            raise ValueError("OLLAMA_MODEL environment variable not set.")
+        if not model: raise ValueError("OLLAMA_MODEL not set.")
         ollama_host = os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434')
         Ollama.__init__(self, config={'model': model, 'ollama_host': ollama_host})
         ChromaDB_VectorStore.__init__(self, config={'collection_name': f"vanna_training_data_{user_id}"})
 
     def log(self, message: str, title: str = "Info"):
-        app.logger.info(f"Vanna Log - {title}: {message}")
+        self.log_queue.put({'type': 'thinking_step', 'step': title, 'details': message})
 
 def _noop_pull_model(self, client, model_name):
     app.logger.info(f"Patch: Skipping Ollama model pull for '{model_name}'")
 Ollama._Ollama__pull_model_if_ne = _noop_pull_model
 
-user_vanna_instances = {}
-
 def get_vanna_instance(user_id: str) -> MyVanna:
-    if user_id not in user_vanna_instances:
-        user_vanna_instances[user_id] = MyVanna(user_id=user_id)
-    return user_vanna_instances[user_id]
+    return MyVanna(user_id=user_id)
+
+def configure_vanna_for_request(vn, user_id):
+    dataset_id = session.get('active_dataset_id')
+    if not dataset_id:
+        raise Exception("No active dataset selected.")
+    
+    with get_user_db_connection(user_id) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT db_path FROM datasets WHERE id = ?", (dataset_id,))
+        row = cursor.fetchone()
+    if not row:
+        raise Exception("Active dataset not found.")
+    
+    engine = create_engine(f"sqlite:///{row[0]}")
+    vn.engine = engine
+    vn.run_sql = lambda sql: pd.read_sql_query(sql, engine)
+    vn.run_sql_is_set = True
+    return vn
 
 # --- Flask Routes ---
 @app.route('/')
 def index():
-    if 'username' not in session:
-        return redirect(url_for('login'))
+    if 'username' not in session: return redirect(url_for('login'))
     return render_template('index.html', username=session['username'])
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -125,187 +137,14 @@ def login():
 @app.route('/logout')
 def logout():
     session.pop('username', None)
+    session.pop('active_dataset_id', None)
     return redirect(url_for('login'))
-
-@app.route('/api/training_status', methods=['GET'])
-@api_login_required
-def get_training_status():
-    user_id = session['username']
-    db_path = get_user_db_path(user_id)
-    if not os.path.exists(db_path):
-        return jsonify({'has_trained_data': False})
-    try:
-        with get_user_db_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT (SELECT COUNT(*) FROM training_ddl) > 0 OR (SELECT COUNT(*) FROM training_documentation) > 0 OR (SELECT COUNT(*) FROM training_qa) > 0")
-            has_data = cursor.fetchone()[0]
-        return jsonify({'has_trained_data': bool(has_data)})
-    except Exception as e:
-        app.logger.error(f"Error checking training status for user '{user_id}': {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-@app.route('/api/train', methods=['POST'])
-@api_login_required
-def train_model():
-    user_id = session['username']
-    vn = get_vanna_instance(user_id)
-
-    def generate_progress():
-        try:
-            yield f"data: {json.dumps({'status': 'starting', 'message': '準備開始訓練...', 'percentage': 0}, ensure_ascii=False)}\n\n"
-            time.sleep(0.2)
-
-            db_path = get_user_db_path(user_id)
-            ddl, documentation, qa_pairs = "", "", []
-            if os.path.exists(db_path):
-                with get_user_db_connection(user_id) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT ddl_statement FROM training_ddl")
-                    ddl = "\n\n".join([row[0] for row in cursor.fetchall()])
-                    cursor.execute("SELECT documentation_text FROM training_documentation")
-                    documentation = "\n\n".join([row[0] for row in cursor.fetchall()])
-                    cursor.execute("SELECT question, sql_query FROM training_qa")
-                    qa_pairs = [{'question': row[0], 'sql': row[1]} for row in cursor.fetchall()]
-                yield f"data: {json.dumps({'status': 'progress', 'message': '已成功從資料庫讀取訓練資料...', 'percentage': 10}, ensure_ascii=False)}\n\n"
-                time.sleep(0.2)
-            
-            yield f"data: {json.dumps({'status': 'progress', 'message': '1. 正在清除舊的模型向量...', 'percentage': 20}, ensure_ascii=False)}\n\n"
-            time.sleep(0.2)
-            vn.remove_training_data(id=None)
-            yield f"data: {json.dumps({'status': 'progress', 'message': '   - 向量資料已清除。', 'percentage': 30}, ensure_ascii=False)}\n\n"
-            time.sleep(0.2)
-            
-            yield f"data: {json.dumps({'status': 'progress', 'message': '2. 開始逐一重新訓練...', 'percentage': 30}, ensure_ascii=False)}\n\n"
-            time.sleep(0.2)
-            
-            total_steps = bool(ddl) + bool(documentation) + bool(qa_pairs)
-            if not total_steps:
-                yield f"data: {json.dumps({'status': 'completed', 'message': '資料庫中沒有可用的訓練資料。', 'percentage': 100}, ensure_ascii=False)}\n\n"
-                return
-
-            completed_steps = 0
-            def report_progress(message):
-                nonlocal completed_steps
-                completed_steps += 1
-                percentage = 30 + int((completed_steps / total_steps) * 60)
-                return f"data: {json.dumps({'status': 'progress', 'percentage': percentage, 'message': message}, ensure_ascii=False)}\n\n"
-
-            if ddl:
-                vn.train(ddl=ddl)
-                yield report_progress('   - DDL 訓練完成')
-                time.sleep(0.2)
-            
-            if documentation:
-                vn.train(documentation=documentation)
-                yield report_progress('   - 文件訓練完成')
-                time.sleep(0.2)
-
-            if qa_pairs:
-                for pair in qa_pairs:
-                    vn.train(question=pair['question'], sql=pair['sql'])
-                yield report_progress(f'   - 問答配對 ({len(qa_pairs)} 組) 訓練完成')
-                time.sleep(0.2)
-
-            yield f"data: {json.dumps({'status': 'completed', 'message': '3. 模型重新訓練成功！', 'percentage': 100}, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            app.logger.error(f"Training error: {e}", exc_info=True)
-            yield f"data: {json.dumps({'status': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-    return Response(stream_with_context(generate_progress()), mimetype='text/event-stream')
-
-@app.route('/api/ask', methods=['POST'])
-@api_login_required
-def ask_question():
-    user_id = session['username']
-    vn = get_vanna_instance(user_id)
-
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'status': 'error', 'message': 'Request must be JSON.'}), 400
-    except Exception:
-        return jsonify({'status': 'error', 'message': 'Invalid JSON in request.'}), 400
-
-    question = data.get('question')
-    if not question:
-        return jsonify({'status': 'error', 'message': 'Question is required.'}), 400
-    
-    edited_sql = data.get('edited_sql')
-
-    def generate_response_stream():
-        final_sql = None
-        try:
-            if edited_sql:
-                final_sql = edited_sql
-                yield f"data: {json.dumps({'type': 'thinking_step', 'content': '[使用者提供] 正在使用您編輯後的 SQL...\n'}, ensure_ascii=False)}\n\n"
-            else:
-                yield f"data: {json.dumps({'type': 'thinking_step', 'content': '--- 開始檢索上下文 ---\n'}, ensure_ascii=False)}\n\n"
-                question_sql_list = vn.get_similar_question_sql(question)
-                if question_sql_list:
-                    qa_log = "**檢索相似問答對 (get_similar_question_sql):**\n" + "".join([f"- 問: {qa['question']}\\n  答: {qa['sql']}\\n" for qa in question_sql_list])
-                    yield f"data: {json.dumps({'type': 'thinking_step', 'content': qa_log}, ensure_ascii=False)}\n\n"
-                
-                ddl_list = vn.get_related_ddl(question)
-                if ddl_list:
-                    yield f"data: {json.dumps({'type': 'thinking_step', 'content': '**檢索相關 DDL (get_related_ddl):**\n' + '\n'.join(ddl_list) + '\n'}, ensure_ascii=False)}\n\n"
-
-                doc_list = vn.get_related_documentation(question)
-                if doc_list:
-                    yield f"data: {json.dumps({'type': 'thinking_step', 'content': '**檢索相關文檔 (get_related_documentation):**\n' + '\n'.join(doc_list) + '\n'}, ensure_ascii=False)}\n\n"
-                
-                yield f"data: {json.dumps({'type': 'thinking_step', 'content': '--- 上下文檢索完畢 ---\\n\\n--- 模型思考過程 ---\\n'}, ensure_ascii=False)}\n\n"
-                
-                sql_generator = vn.generate_sql(question=question, allow_llm_to_see_data=True)
-                
-                sql_buffer = []
-                for chunk in sql_generator:
-                    content = str(chunk.sql) if hasattr(chunk, 'sql') else str(chunk)
-                    yield f"data: {json.dumps({'type': 'thinking_step', 'content': content}, ensure_ascii=False)}\n\n"
-                    sql_buffer.append(content)
-                
-                full_response = "".join(sql_buffer).strip()
-                match = re.search(r"```sql\\n(.*?)\\n```", full_response, re.DOTALL)
-                if match:
-                    final_sql = match.group(1).strip()
-                else:
-                    sql_match = re.search(r"(SELECT|WITH).+", full_response, re.DOTALL | re.IGNORECASE)
-                    if sql_match:
-                        final_sql = sql_match.group(0).strip()
-
-            if final_sql:
-                yield f"data: {json.dumps({'type': 'sql_result', 'sql': final_sql}, ensure_ascii=False)}\n\n"
-            else:
-                yield f"data: {json.dumps({'type': 'thinking_step', 'content': '未能生成有效的 SQL 查詢。'}, ensure_ascii=False)}\n\n"
-
-        except Exception as e:
-            app.logger.error(f"SQL generation error: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': f'SQL Generation Error: {e}'}, ensure_ascii=False)}\n\n"
-
-    return Response(stream_with_context(generate_response_stream()), mimetype='text/event-stream')
-
-@app.route('/api/execute_sql', methods=['POST'])
-@api_login_required
-def execute_sql():
-    user_id = session['username']
-    vn = get_vanna_instance(user_id)
-    sql = request.get_json().get('sql')
-    if not sql:
-        return jsonify({'status': 'error', 'message': 'SQL is required.'}), 400
-    try:
-        if not hasattr(vn, 'run_sql_is_set') or not vn.run_sql_is_set:
-            return jsonify({'status': 'error', 'message': 'Database connection not established.'}), 400
-        df = vn.run_sql(sql=sql)
-        return jsonify({'status': 'success', 'data': df.to_string()})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/datasets', methods=['GET', 'POST'])
 @api_login_required
 def handle_datasets():
     user_id = session['username']
     if request.method == 'GET':
-        db_path = get_user_db_path(user_id)
-        if not os.path.exists(db_path):
-            return jsonify({'status': 'success', 'datasets': []})
         with get_user_db_connection(user_id) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -318,11 +157,7 @@ def handle_datasets():
         if not dataset_name or not files:
             return jsonify({'status': 'error', 'message': 'Dataset name and files are required.'}), 400
         
-        dataset_id = uuid.uuid4().hex[:12]
-        db_dir = os.path.join('user_data', 'datasets')
-        os.makedirs(db_dir, exist_ok=True)
-        db_path = os.path.join(db_dir, f"{user_id}_{dataset_id}.sqlite")
-
+        db_path = os.path.join('user_data', 'datasets', f'{uuid.uuid4().hex}.sqlite')
         try:
             engine = create_engine(f'sqlite:///{db_path}')
             for file in files:
@@ -335,7 +170,6 @@ def handle_datasets():
                 cursor.execute("INSERT INTO datasets (dataset_name, db_path) VALUES (?, ?)", (dataset_name, db_path))
                 new_id = cursor.lastrowid
                 conn.commit()
-            
             return jsonify({'status': 'success', 'dataset': {'id': new_id, 'dataset_name': dataset_name}}), 201
         except Exception as e:
             if os.path.exists(db_path): os.remove(db_path)
@@ -350,209 +184,328 @@ def activate_dataset():
         return jsonify({'status': 'error', 'message': 'dataset_id is required.'}), 400
     
     try:
-        with get_user_db_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT db_path, dataset_name FROM datasets WHERE id = ?", (dataset_id,))
-            row = cursor.fetchone()
+        session['active_dataset_id'] = dataset_id
+        vn = get_vanna_instance(user_id)
+        vn = configure_vanna_for_request(vn, user_id)
         
-        if row:
-            db_path, dataset_name = row
-            vn = get_vanna_instance(user_id)
-            engine = create_engine(f"sqlite:///{db_path}")
-            vn.engine = engine
-            vn.run_sql = lambda sql: pd.read_sql_query(sql, engine)
-            vn.run_sql_is_set = True
-            session['active_dataset_id'] = dataset_id
-            
-            inspector = inspect(engine)
-            schema_info = {name: [f"{col['name']} ({str(col['type'])})" for col in inspector.get_columns(name)] for name in inspector.get_table_names()}
-            ddl_statements = []
-            with engine.connect() as connection:
-                for name in inspector.get_table_names():
-                    ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
-                    if ddl: ddl_statements.append(ddl + ";")
+        inspector = inspect(vn.engine)
+        table_names = inspector.get_table_names()
+        ddl_statements = []
+        with vn.engine.connect() as connection:
+            for name in table_names:
+                ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
+                if ddl: ddl_statements.append(ddl + ";")
 
-            return jsonify({'status': 'success', 'message': f"Dataset '{dataset_name}' activated.", 'active_dataset_id': dataset_id, 'schema': schema_info, 'ddl': ddl_statements})
-        return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
+        training_data = vn.get_training_data()
+        is_trained = not training_data.empty if training_data is not None else False
+
+        return jsonify({
+            'status': 'success', 
+            'message': f"Dataset activated.", 
+            'table_names': table_names, 
+            'ddl': ddl_statements,
+            'is_trained': is_trained
+        })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
-@app.route('/api/datasets/<int:dataset_id>', methods=['DELETE'])
-@api_login_required
-def delete_dataset(dataset_id):
-    user_id = session['username']
-    with get_user_db_connection(user_id) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT db_path, dataset_name FROM datasets WHERE id = ?", (dataset_id,))
-        row = cursor.fetchone()
-        if not row:
-            return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
-        db_path, dataset_name = row
-        
-        if session.get('active_dataset_id') == dataset_id:
-            session.pop('active_dataset_id', None)
-        
-        cursor.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
-        conn.commit()
-        if os.path.exists(db_path): os.remove(db_path)
-    return jsonify({'status': 'success', 'message': f"Dataset '{dataset_name}' deleted."})
-
-@app.route('/api/correction_rules', methods=['GET', 'POST'])
-@api_login_required
-def handle_correction_rules():
-    user_id = session['username']
-    with get_user_db_connection(user_id) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        if request.method == 'GET':
-            cursor.execute("SELECT id, incorrect_name, correct_name FROM correction_rules ORDER BY created_at DESC")
-            return jsonify({'status': 'success', 'rules': [dict(row) for row in cursor.fetchall()]})
-        if request.method == 'POST':
-            data = request.get_json()
-            incorrect, correct = data.get('incorrect_name'), data.get('correct_name')
-            if not incorrect or not correct:
-                return jsonify({'status': 'error', 'message': 'Both names are required.'}), 400
-            try:
-                cursor.execute("INSERT INTO correction_rules (incorrect_name, correct_name) VALUES (?, ?)", (incorrect, correct))
-                new_id = cursor.lastrowid
-                conn.commit()
-                return jsonify({'status': 'success', 'rule': {'id': new_id, 'incorrect_name': incorrect, 'correct_name': correct}}), 201
-            except sqlite3.IntegrityError:
-                return jsonify({'status': 'error', 'message': f'Rule for "{incorrect}" already exists.'}), 409
-
-@app.route('/api/correction_rules/<int:rule_id>', methods=['DELETE'])
-@api_login_required
-def delete_correction_rule(rule_id):
-    user_id = session['username']
-    with get_user_db_connection(user_id) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM correction_rules WHERE id = ?", (rule_id,))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({'status': 'error', 'message': 'Rule not found.'}), 404
-    return jsonify({'status': 'success', 'message': 'Rule deleted.'})
-
-@app.route('/api/generate_qa_from_sql', methods=['POST'])
-@api_login_required
-def generate_qa_from_sql():
-    user_id = session['username']
-    vn = get_vanna_instance(user_id)
-    file = request.files.get('sql_file')
-    if not file or file.filename == '':
-        return jsonify({'status': 'error', 'message': 'No file selected.'}), 400
-    
-    sql_content = file.read().decode('utf-8')
-    def generate_stream(content):
-        sql_queries = [q.strip() for q in content.split(';') if q.strip()]
-        total = len(sql_queries)
-        yield f"data: {json.dumps({'status': 'starting', 'total': total}, ensure_ascii=False)}\n\n"
-        for i, sql in enumerate(sql_queries):
-            try:
-                question = vn.generate_question(sql)
-                yield f"data: {json.dumps({'status': 'progress', 'qa_pair': {'question': question, 'sql': sql}, 'count': i + 1, 'total': total}, ensure_ascii=False)}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'status': 'error_partial', 'sql': sql, 'message': str(e)}, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({'status': 'completed', 'message': 'Generation complete.'}, ensure_ascii=False)}\n\n"
-    return Response(stream_with_context(generate_stream(sql_content)), mimetype='text/event-stream')
-
-@app.route('/api/schema', methods=['GET'])
-@api_login_required
-def get_schema():
-    user_id = session['username']
-    active_dataset_id = session.get('active_dataset_id')
-    if not active_dataset_id:
-        return jsonify({'schema': {}, 'ddl': []})
-    
-    with get_user_db_connection(user_id) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT db_path FROM datasets WHERE id = ?", (active_dataset_id,))
-        row = cursor.fetchone()
-    if not row:
-        return jsonify({'status': 'error', 'message': 'Active dataset not found.'}), 404
-    
-    engine = create_engine(f"sqlite:///{row[0]}")
-    inspector = inspect(engine)
-    schema_info = {name: [f"{col['name']} ({str(col['type'])})" for col in inspector.get_columns(name)] for name in inspector.get_table_names()}
-    ddl_statements = []
-    with engine.connect() as connection:
-        for name in inspector.get_table_names():
-            ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
-            if ddl: ddl_statements.append(ddl + ";")
-    return jsonify({'schema': schema_info, 'ddl': ddl_statements})
 
 @app.route('/api/training_data', methods=['GET'])
 @api_login_required
 def get_training_data():
     user_id = session['username']
-    db_path = get_user_db_path(user_id)
-    if not os.path.exists(db_path):
-        return jsonify({'status': 'success', 'ddl': [], 'qa_pairs': [], 'documentation': []})
-    
+    table_name = request.args.get('table_name', 'global')
+    dataset_id = session.get('active_dataset_id')
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
     with get_user_db_connection(user_id) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT ddl_statement FROM training_ddl ORDER BY created_at DESC")
-        ddls = [row['ddl_statement'] for row in cursor.fetchall()]
-        cursor.execute("SELECT id, question, sql_query as sql FROM training_qa ORDER BY created_at DESC")
+        
+        cursor.execute("SELECT documentation_text FROM training_documentation WHERE table_name = ? AND (dataset_id = ? OR dataset_id IS NULL)", (table_name, dataset_id))
+        doc_row = cursor.fetchone()
+        documentation = doc_row['documentation_text'] if doc_row else ""
+        
+        cursor.execute("SELECT id, question, sql_query as sql FROM training_qa WHERE table_name = ? AND (dataset_id = ? OR dataset_id IS NULL) ORDER BY created_at DESC", (table_name, dataset_id))
         qa_pairs = [dict(row) for row in cursor.fetchall()]
-        cursor.execute("SELECT documentation_text FROM training_documentation ORDER BY created_at DESC")
-        documentation = [row['documentation_text'] for row in cursor.fetchall()]
-    return jsonify({'status': 'success', 'ddl': ddls, 'qa_pairs': qa_pairs, 'documentation': documentation})
+        
+        cursor.execute("SELECT documentation_text FROM training_documentation WHERE table_name = ? AND dataset_id = ?", ('__dataset_analysis__', dataset_id))
+        analysis_row = cursor.fetchone()
+        dataset_analysis = analysis_row['documentation_text'] if analysis_row else ""
+
+    return jsonify({
+        'documentation': documentation, 
+        'qa_pairs': qa_pairs,
+        'dataset_analysis': dataset_analysis
+    })
+
+@app.route('/api/save_documentation', methods=['POST'])
+@api_login_required
+def save_documentation():
+    user_id = session['username']
+    data = request.get_json()
+    doc_content = data.get('documentation', '')
+    table_name = data.get('table_name', 'global')
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
+    try:
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            if doc_content.strip():
+                cursor.execute(
+                    "REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)",
+                    (dataset_id, table_name, doc_content)
+                )
+                message = f"Documentation for table '{table_name}' saved."
+            else:
+                cursor.execute("DELETE FROM training_documentation WHERE dataset_id = ? AND table_name = ?", (dataset_id, table_name))
+                message = f"Documentation for table '{table_name}' cleared."
+            conn.commit()
+        return jsonify({'status': 'success', 'message': message})
+    except sqlite3.Error as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/add_qa_question', methods=['POST'])
 @api_login_required
 def add_qa_question():
     user_id = session['username']
     data = request.get_json()
-    question, sql_query = data.get('question'), data.get('sql')
-    if not question or not sql_query:
-        return jsonify({'status': 'error', 'message': 'Question and SQL are required.'}), 400
-    
-    with get_user_db_connection(user_id) as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO training_qa (question, sql_query) VALUES (?, ?)", (question, sql_query))
-        new_id = cursor.lastrowid
-        conn.commit()
-    return jsonify({'status': 'success', 'id': new_id}), 201
+    question = data.get('question')
+    sql_query = data.get('sql')
+    table_name = data.get('table_name', 'global')
+    dataset_id = session.get('active_dataset_id')
 
-@app.route('/api/update_qa_question', methods=['POST'])
+    if not all([question, sql_query, dataset_id]):
+        return jsonify({'status': 'error', 'message': 'Question, SQL, and active dataset are required.'}), 400
+
+    try:
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO training_qa (question, sql_query, table_name, dataset_id) VALUES (?, ?, ?, ?)",
+                (question, sql_query, table_name, dataset_id)
+            )
+            new_id = cursor.lastrowid
+            conn.commit()
+        return jsonify({'status': 'success', 'message': 'QA pair added successfully.', 'id': new_id})
+    except sqlite3.IntegrityError:
+        return jsonify({'status': 'info', 'message': 'QA pair may already exist.'}), 200
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error for user '{user_id}' in add_qa_question: {e}")
+        return jsonify({'status': 'error', 'message': f"Database error: {e}"}), 500
+
+@app.route('/api/train', methods=['POST'])
 @api_login_required
-def update_qa_question():
+def train_model():
+    user_id = session['username']
+    vn = get_vanna_instance(user_id)
+    vn = configure_vanna_for_request(vn, user_id)
+
+    def generate_progress():
+        try:
+            ddl = request.form.get('ddl')
+            documentation = request.form.get('doc', '')
+            qa_pairs_json = request.form.get('qa_pairs')
+            qa_pairs = json.loads(qa_pairs_json) if qa_pairs_json else []
+
+            yield f"data: {json.dumps({'percentage': 0, 'message': '開始訓練...'})}\n\n"
+            
+            total_steps = bool(ddl) + bool(documentation) + bool(qa_pairs)
+            completed_steps = 0
+
+            if ddl:
+                vn.train(ddl=ddl)
+                completed_steps += 1
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': 'DDL 訓練完成。'})}\n\n"
+            
+            if documentation:
+                vn.train(documentation=documentation)
+                completed_steps += 1
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': '文件訓練完成。'})}\n\n"
+
+            if qa_pairs:
+                for pair in qa_pairs:
+                    if pair.get('question') and pair.get('sql'):
+                        vn.train(question=pair['question'], sql=pair['sql'])
+                completed_steps += 1
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': f'問答配對 ({len(qa_pairs)} 組) 訓練完成。'})}\n\n"
+
+            yield f"data: {json.dumps({'percentage': 100, 'message': '所有訓練步驟已完成。'})}\n\n"
+
+        except Exception as e:
+            app.logger.error(f"Training failed for user '{user_id}': {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return Response(stream_with_context(generate_progress()), mimetype='text/event-stream')
+
+@app.route('/api/ask', methods=['POST'])
+@api_login_required
+def ask_question():
+    user_id = session['username']
+    data = request.json
+    question = data.get('question')
+    if not question:
+        return jsonify({'status': 'error', 'message': 'Question is required.'}), 400
+
+    vn = get_vanna_instance(user_id)
+    
+    def run_vanna_in_thread(question):
+        try:
+            vn_thread = configure_vanna_for_request(get_vanna_instance(user_id), user_id)
+            sql = vn_thread.generate_sql(question=question)
+            vn.log_queue.put({'type': 'sql_result', 'sql': sql})
+            
+            df = vn_thread.run_sql(sql=sql)
+            result_string = df.to_string()
+            vn.log_queue.put({'type': 'data_result', 'data': result_string})
+
+        except Exception as e:
+            vn.log_queue.put({'type': 'error', 'message': str(e)})
+        finally:
+            vn.log_queue.put(None)
+
+    thread = Thread(target=run_vanna_in_thread, args=(question,))
+    thread.start()
+
+    def stream_logs():
+        while True:
+            item = vn.log_queue.get()
+            if item is None:
+                break
+            yield f"data: {json.dumps(item)}\n\n"
+
+    return Response(stream_with_context(stream_logs()), mimetype='text/event-stream')
+
+@app.route('/api/generate_qa_from_sql', methods=['POST'])
+@api_login_required
+def generate_qa_from_sql():
+    user_id = session['username']
+    if 'sql_file' not in request.files:
+        return jsonify({'status': 'error', 'message': 'No sql_file part in the request'}), 400
+
+    file = request.files['sql_file']
+    if file.filename == '':
+        return jsonify({'status': 'error', 'message': 'No selected file'}), 400
+
+    if not file or not file.filename.lower().endswith('.sql'):
+        return jsonify({'status': 'error', 'message': 'Invalid file type. Please upload a .sql file.'}), 400
+
+    sql_content = file.read().decode('utf-8')
+
+    def stream_qa_generation(sql_content):
+        try:
+            vn = get_vanna_instance(user_id)
+            vn = configure_vanna_for_request(vn, user_id)
+            queries = [q.strip() for q in sql_content.split(';') if q.strip()]
+            total_queries = len(queries)
+            yield f"data: {json.dumps({'status': 'starting', 'total': total_queries})}\n\n"
+            system_prompt = "You are an expert at guessing the business question that a SQL query is answering. The user will provide a SQL query. Your task is to return a single, concise business question, in Traditional Chinese (繁體中文), that the SQL query answers. Do not add any explanation or preamble."
+            
+            for i, sql_query in enumerate(queries):
+                try:
+                    question = vn.submit_prompt([
+                        {'role': 'system', 'content': system_prompt},
+                        {'role': 'user', 'content': sql_query}
+                    ])
+                    qa_pair = {'question': question, 'sql': sql_query}
+                except Exception as e:
+                    qa_pair = {'question': f"生成問題時發生錯誤: {str(e)}", 'sql': sql_query}
+                
+                yield f"data: {json.dumps({'status': 'progress', 'count': i + 1, 'total': total_queries, 'qa_pair': qa_pair})}\n\n"
+            
+            yield f"data: {json.dumps({'status': 'completed', 'message': '問答配對已全部生成！'})}\n\n"
+        except Exception as e:
+            app.logger.error(f"An error occurred in stream_qa_generation: {e}", exc_info=True)
+            yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
+
+    return Response(stream_with_context(stream_qa_generation(sql_content)), mimetype='text/event-stream')
+
+@app.route('/api/generate_documentation', methods=['POST'])
+@api_login_required
+def generate_documentation():
     user_id = session['username']
     data = request.get_json()
-    qa_id, new_question = data.get('id'), data.get('question')
-    if not qa_id or new_question is None:
-        return jsonify({'status': 'error', 'message': 'ID and question are required.'}), 400
-    
-    with get_user_db_connection(user_id) as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE training_qa SET question = ? WHERE id = ?", (new_question, qa_id))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return jsonify({'status': 'error', 'message': 'QA pair not found.'}), 404
-    return jsonify({'status': 'success'})
+    ddl = data.get('ddl')
+    if not ddl:
+        return jsonify({'status': 'error', 'message': 'DDL is required.'}), 400
 
-@app.route('/api/save_ddl', methods=['POST'])
-@api_login_required
-def save_ddl():
-    user_id = session['username']
-    ddl_content = request.get_json().get('ddl')
     try:
-        _save_single_entry_data(user_id, 'training_ddl', 'ddl_statement', ddl_content)
-        return jsonify({'status': 'success', 'message': 'DDL saved.'})
+        vn = get_vanna_instance(user_id)
+        vn = configure_vanna_for_request(vn, user_id)
+        prompt = f"""
+        基於以下 DDL 語句：
+        ---
+        {ddl}
+        ---
+        請為我生成兩部分內容：
+
+        1.  **實體關係圖 (ER Model)**：使用純文字和 ASCII 字元，創建一個垂直的實體關係圖，清晰地展示資料表之間的關係 (例如 one-to-one, one-to-many)。
+        2.  **實體結構說明**：在圖表下方，用簡潔的業務術語逐點描述每個資料表及其主要用途。
+
+        請將這兩部分內容合併為一個單一的、格式化的純文字區塊返回，不要包含任何 Markdown 標籤。
+        """
+        documentation_text = vn.submit_prompt([{'role': 'user', 'content': prompt}])
+
+        if documentation_text:
+            dataset_id = session.get('active_dataset_id')
+            if dataset_id:
+                with get_user_db_connection(user_id) as conn:
+                    cursor = conn.cursor()
+                    analysis_table_name = '__dataset_analysis__'
+                    cursor.execute(
+                        "REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)",
+                        (dataset_id, analysis_table_name, documentation_text)
+                    )
+                    conn.commit()
+        return jsonify({
+            'status': 'success',
+            'documentation': documentation_text or "無法生成文件。"
+        })
     except Exception as e:
+        app.logger.error(f"Error generating documentation for user '{user_id}': {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/api/save_documentation', methods=['POST'])
+@app.route('/api/analyze_schema', methods=['POST'])
 @api_login_required
-def save_documentation():
+def analyze_schema():
     user_id = session['username']
-    doc_content = request.get_json().get('documentation')
     try:
-        _save_single_entry_data(user_id, 'training_documentation', 'documentation_text', doc_content)
-        return jsonify({'status': 'success', 'message': 'Documentation saved.'})
+        vn = get_vanna_instance(user_id)
+        vn = configure_vanna_for_request(vn, user_id)
+
+        df_information_schema = vn.run_sql("""
+            SELECT
+                'main' as table_catalog,
+                'main' as table_schema,
+                m.name as table_name,
+                p.name as column_name,
+                p.type as data_type,
+                '' as comment
+            FROM sqlite_master m
+            JOIN pragma_table_info(m.name) p
+            WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'
+        """)
+
+        if df_information_schema.empty:
+             return jsonify({"status": "success", "analysis": []})
+
+        training_plan = vn.get_training_plan_generic(df=df_information_schema)
+        
+        analysis_results = []
+        for item in training_plan._plan:
+            if item.item_type == 'documentation':
+                analysis_results.append({
+                    "table_name": item.item_name,
+                    "suggested_documentation": item.item_value,
+                })
+
+        return jsonify({"status": "success", "analysis": analysis_results})
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        app.logger.error(f"Schema analysis failed for user '{user_id}': {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'

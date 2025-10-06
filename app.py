@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import re
 import json
 import sqlite3
+import uuid
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DatabaseError
@@ -61,6 +62,16 @@ def init_training_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        
+        # Create datasets table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS datasets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dataset_name TEXT NOT NULL,
+                db_path TEXT NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
 
         conn.commit()
         
@@ -87,6 +98,26 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1, x_prefix=1)
 
 # 初始化訓練數據庫
 init_training_db()
+
+# --- Helper Functions for Dataset Management ---
+
+def get_dataset_db_path(dataset_id: str) -> str:
+    db_dir = os.path.join(os.getcwd(), 'user_data', 'datasets')
+    os.makedirs(db_dir, exist_ok=True)
+    return os.path.join(db_dir, f'dataset_{dataset_id}.sqlite')
+
+# --- Initialize Vanna Instance with Dataset Support ---
+active_dataset_id = None
+active_dataset_engine = None
+
+# --- Simple authentication decorator for API endpoints (single user mode) ---
+def api_login_required(f):
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # In single user mode, we assume user is always authenticated
+        return f(*args, **kwargs)
+    return decorated_function
 
 # 創建 Vanna 實例
 class MyVanna(Ollama, ChromaDB_VectorStore):
@@ -1059,6 +1090,130 @@ def deduplicate_qa():
     except Exception as e:
         return jsonify({'status': 'error', 'message': f"An unexpected error occurred during deduplication: {str(e)}"}), 500
 
+
+# --- Dataset Management API Endpoints ---
+@app.route('/api/datasets', methods=['GET', 'POST'])
+@api_login_required
+def handle_datasets():
+    global active_dataset_id, active_dataset_engine
+    db_path = os.getenv('TRAINING_DATA_DB_PATH', 'training_data.sqlite')
+    
+    if request.method == 'GET':
+        try:
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, dataset_name, created_at FROM datasets ORDER BY created_at DESC")
+                return jsonify({'status': 'success', 'datasets': [dict(row) for row in cursor.fetchall()]})
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+    if request.method == 'POST':
+        dataset_name = request.form.get('dataset_name')
+        files = request.files.getlist('files')
+        if not dataset_name or not files:
+            return jsonify({'status': 'error', 'message': 'Dataset name and files are required.'}), 400
+        
+        dataset_id = uuid.uuid4().hex[:12]
+        dataset_db_path = get_dataset_db_path(dataset_id)
+
+        try:
+            engine = create_engine(f'sqlite:///{dataset_db_path}')
+            for file in files:
+                df = pd.read_csv(file.stream)
+                table_name = os.path.splitext(secure_filename(file.filename))[0].replace('-', '_').replace(' ', '_')
+                df.to_sql(table_name, engine, index=False, if_exists='replace')
+            
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO datasets (dataset_name, db_path) VALUES (?, ?)", (dataset_name, dataset_db_path))
+                new_id = cursor.lastrowid
+                conn.commit()
+            
+            return jsonify({'status': 'success', 'dataset': {'id': new_id, 'dataset_name': dataset_name}}), 201
+        except Exception as e:
+            if os.path.exists(dataset_db_path): 
+                os.remove(dataset_db_path)
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/datasets/activate', methods=['POST'])
+@api_login_required
+def activate_dataset():
+    global active_dataset_id, active_dataset_engine, vn
+    dataset_id = request.get_json().get('dataset_id')
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'dataset_id is required.'}), 400
+    
+    try:
+        db_path = os.getenv('TRAINING_DATA_DB_PATH', 'training_data.sqlite')
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT db_path, dataset_name FROM datasets WHERE id = ?", (dataset_id,))
+            row = cursor.fetchone()
+        
+        if row:
+            dataset_db_path, dataset_name = row
+            engine = create_engine(f"sqlite:///{dataset_db_path}")
+            vn.engine = engine
+            vn.run_sql = lambda sql: pd.read_sql_query(sql, engine)
+            vn.run_sql_is_set = True
+            active_dataset_id = dataset_id
+            active_dataset_engine = engine
+            
+            inspector = inspect(engine)
+            table_names = inspector.get_table_names()
+            schema_info = {name: [f"{col['name']} ({str(col['type'])})" for col in inspector.get_columns(name)] for name in table_names}
+            ddl_statements = []
+            with engine.connect() as connection:
+                for name in table_names:
+                    ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
+                    if ddl: ddl_statements.append(ddl + ";")
+
+            # Check if the model is already trained by looking for existing training data
+            training_data = vn.get_training_data()
+            is_trained = not training_data.empty
+
+            return jsonify({
+                'status': 'success',
+                'message': f"Dataset '{dataset_name}' activated.",
+                'active_dataset_id': dataset_id,
+                'schema': schema_info,
+                'ddl': ddl_statements,
+                'table_names': table_names,
+                'is_trained': is_trained
+            })
+        return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/datasets/<int:dataset_id>', methods=['DELETE'])
+@api_login_required
+def delete_dataset(dataset_id):
+    global active_dataset_id, active_dataset_engine
+    db_path = os.getenv('TRAINING_DATA_DB_PATH', 'training_data.sqlite')
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT db_path, dataset_name FROM datasets WHERE id = ?", (dataset_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
+        dataset_db_path, dataset_name = row
+        
+        if active_dataset_id == dataset_id:
+            active_dataset_id = None
+            active_dataset_engine = None
+            vn = MyVanna()
+            vn.engine = None
+            vn.run_sql = None
+            vn.run_sql_is_set = False
+        
+        cursor.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+        conn.commit()
+        
+        if os.path.exists(dataset_db_path):
+            os.remove(dataset_db_path)
+            
+        return jsonify({'status': 'success', 'message': f'Dataset "{dataset_name}" deleted successfully.'})
 
 if __name__ == '__main__':
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'

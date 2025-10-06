@@ -5,1153 +5,146 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DBWIKI.AI 網頁介面</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 2em; }
-        h1, h2 { color: #333; }
-        .container { max-width: 800px; margin: auto; }
-        .section { border: 1px solid #ccc; padding: 1em; margin-bottom: 1em; border-radius: 5px; }
-        textarea { width: 95%; height: 100px; }
-        button { padding: 0.5em 1em; background-color: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 2em; background-color: #f4f4f9; }
+        h1, h2, h3 { color: #333; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 2em; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .section { border: 1px solid #e0e0e0; padding: 1.5em; margin-bottom: 1.5em; border-radius: 5px; }
+        textarea { width: 98%; height: 120px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; }
+        button { padding: 0.6em 1.2em; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
         button:hover { background-color: #0056b3; }
-        .table-container {
-            width: 100%; /* Ensure container takes full width */
-            overflow-x: auto; /* Enable horizontal scrolling */
-            margin-top: 1em;
-        }
-        table {
-            width: 1200px; /* Set a fixed width to force horizontal scroll */
-            border-collapse: collapse;
-        }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
-            white-space: nowrap; /* Prevent text from wrapping to force horizontal scroll */
-        }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        .form-group { margin-bottom: 1em; display: flex; align-items: center; gap: 10px; }
+        .form-group label { font-weight: bold; }
+        select { flex-grow: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        .table-container { width: 100%; overflow-x: auto; margin-top: 1em; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; vertical-align: top; }
         th { background-color: #f2f2f2; }
-        td textarea { width: 95%; height: 60px; border: 1px solid #ccc; padding: 5px; white-space: pre-wrap; }
+        td textarea { width: 98%; height: 80px; border: 1px solid #eee; }
         td pre { white-space: pre-wrap; background-color: #f8f8f8; padding: 5px; margin: 0; }
-        #qa-pagination-controls { margin-top: 1em; text-align: center; }
-        #qa-pagination-controls button { margin: 0 5px; }
-        .progress-container {
-            width: 100%;
-            background-color: #f3f3f3;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            margin-top: 10px;
-        }
-        .progress-bar {
-            width: 0%;
-            height: 20px;
-            background-color: #4caf50;
-            border-radius: 5px;
-            transition: width 0.3s ease-in-out;
-        }
-        .progress-text {
-            display: block;
-            text-align: center;
-            padding: 5px;
-            font-size: 0.9em;
-            color: #333;
-        }
+        #training-log, #qa-gen-log, #thinking-output, #sql-output, #result-output { background-color: #282c34; color: #abb2bf; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; border-radius: 4px; }
+        .modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background-color:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center; }
+        .modal-content { background:white; padding:2em; border-radius:5px; width:500px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>資料庫整理介面</h1>
 
-        <!-- Section 0: Dataset Management -->
         <div class="section">
             <h2>資料集管理</h2>
-            <p>請從下方選擇一個資料集來激活，或上傳新的 CSV 檔案來創建一個新的資料集。</p>
-            <div id="dataset-list-container">
-                <!-- Datasets will be rendered here by JavaScript -->
-            </div>
-            <button onclick="openNewDatasetModal()">+ 新增資料集</button>
-        </div>
-
-        <!-- Section for Correction Rules -->
-        <div id="correction-rules-section" class="section" style="display:none;">
-            <h2>校對規則管理</h2>
-            <p>用於修正 LLM 可能產生的錯誤資料表或欄位名稱。</p>
-            <form id="correction-rule-form" onsubmit="return false;">
-                <input type="text" id="incorrect-name" placeholder="錯誤的名稱 (例如：SuperMarket_Analysis)" style="width: 40%;">
-                <input type="text" id="correct-name" placeholder="正確的名稱 (例如：SuperMarketAnalysis)" style="width: 40%;">
-                <button type="button" onclick="addCorrectionRule()">新增規則</button>
-            </form>
-            <div class="table-container" style="margin-top: 1em;">
-                <table id="correction-rules-table" style="width: 100%;">
-                    <thead>
-                        <tr>
-                            <th>錯誤的名稱</th>
-                            <th>正確的名稱</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="correction-rules-body">
-                        <!-- Rules will be rendered here -->
-                    </tbody>
-                </table>
+            <div class="form-group">
+                <label for="dataset-selector">選擇資料集：</label>
+                <select id="dataset-selector"></select>
+                <button onclick="openNewDatasetModal()">+ 新增</button>
             </div>
         </div>
- 
-        <!-- Section 1: Database Connection (Hidden) -->
-        <div class="section" style="display:none;">
-            <h2>1. 連接到資料庫 (舊版)</h2>
-            <p>選擇您的資料庫類型並提供連接詳細資訊。</p>
-            <form id="db-connection-form" onsubmit="return false;">
-                <select id="db-type" name="type" onchange="toggleDbInputs()">
-                    <option value="postgresql">PostgreSQL</option>
-                    <option value="mysql">MySQL</option>
-                    <option value="mssql">MS SQL Server</option>
-                    <option value="sqlite">SQLite</option>
-                    <option value="csv" selected>CSV</option>
-                </select>
-                <div id="sql-db-inputs">
-                    <input type="text" id="db-host" name="host" placeholder="主機" value="localhost">
-                    <input type="text" id="db-port" name="port" placeholder="端口" value="5432">
-                    <input type="text" id="db-user" name="username" placeholder="用戶名">
-                    <input type="password" id="db-password" name="password" placeholder="密碼">
-                    <input type="text" id="db-name" name="database" placeholder="資料庫名稱">
-                </div>
-                <div id="file-db-inputs" style="display: none;">
-                    <label for="db-file-input">選擇文件 SQLite,csv：</label>
-                    <input type="file" id="db-file-input" name="database_file">
-                </div>
-                <br>
-                <button type="button" onclick="connectDb()">連接</button>
-                <button type="button" id="analyze-ddl-btn" onclick="analyzeDdl()">Schema分析結果 </button>
-            </form>
-        </div>
 
-        <!-- Section 2: 訓練模型 -->
-        <div class="section">
-            <h2>2. 訓練模型</h2>
-            <p>當激活一個資料集後，相關的訓練資料會自動載入下方。您也可以手動修改或上傳新的檔案進行訓練。</p>
+        <div id="training-section" class="section" style="display: none;">
+            <h2>訓練模型</h2>
+            <p>選擇一個資料表 (CSV) 來查看或編輯其專屬的訓練資料，或選擇「全局」來管理跨資料表的邏輯。</p>
+            
+            <div class="form-group">
+                <label for="table-selector">選擇資料表 (CSV)：</label>
+                <select id="table-selector"></select>
+            </div>
 
-            <h3><input type="checkbox" id="train-ddl-checkbox" checked> a. Schema分析陳述 (DDL)</h3>
-            <textarea id="ddl-input" placeholder="激活資料集後，DDL 將顯示於此..."></textarea>
-            <br>
-            <input type="file" id="ddl-file-input" accept=".sql">
-            <button type="button" onclick="saveDdl()" style="margin-left: 10px;">儲存 DDL</button>
+            <h3>a. Schema分析陳述 (DDL)</h3>
+            <textarea id="ddl-input" placeholder="選擇資料表後，其 DDL 將顯示於此..." readonly></textarea>
             <br><br>
 
-            <h3><input type="checkbox" id="train-doc-checkbox" checked> b. 資料的知識背景文件</h3>
-            <p style="font-size: 0.9em; color: #666;">用於添加業務術語定義或其他關於資料的知識背景。</p>
-            <textarea id="doc-input" placeholder="例如：&#10;The 'customers' table contains all registered users. 'id' is the unique identifier for each customer."></textarea>
-            <br>
-            <input type="file" id="doc-file-input" accept=".txt,.md">
-            <button type="button" onclick="saveDocumentation()" style="margin-left: 10px;">儲存文件</button>
+            <h3>b. 資料的知識背景文件</h3>
+            <textarea id="doc-input" placeholder="輸入與所選資料表相關的業務知識，或從下方上傳檔案..."></textarea>
+            <div class="form-group" style="margin-top: 10px;">
+                <label for="doc-file-input">或上傳文件 (.txt, .md):</label>
+                <input type="file" id="doc-file-input" accept=".txt,.md" onchange="handleDocFileUpload(event)">
+            </div>
+            <button type="button" onclick="saveDocumentation()">儲存文件</button>
             <br><br>
 
-            <h3><input type="checkbox" id="train-qa-checkbox" checked> c. SQL 問答配對</h3>
-            <p style="font-size: 0.9em; color: #666;">用於提供自然語言問題與對應 SQL 查詢的配對範例。</p>
-            <input type="file" id="qa-file-input" accept=".json,.sql">
-            <button type="button" onclick="generateQaFromSql()">從 SQL 生成問答</button>
-            <div id="qa-gen-progress-container" class="progress-container" style="display: none;">
-                <div class="progress-bar"></div>
-                <span class="progress-text"></span>
-            </div>
+            <h3>c. SQL 問答配對</h3>
             <div id="qa-list-container" class="table-container">
                 <table id="qa-table">
-                    <thead>
-                        <tr>
-                            <th>SQL說明</th>
-                            <th>SQL語法</th>
-                        </tr>
-                    </thead>
-                    <tbody id="qa-table-body">
-                        <!-- QA pairs will be rendered here by JavaScript -->
-                    </tbody>
+                    <thead><tr><th>SQL說明 (問題)</th><th>SQL語法</th><th>操作</th></tr></thead>
+                    <tbody id="qa-table-body"></tbody>
                 </table>
-                <div id="qa-pagination-controls">
-                    <button id="prev-page-btn" onclick="prevPage()">上一頁</button>
-                    <span id="page-info"></span>
-                    <button id="next-page-btn" onclick="nextPage()">下一頁</button>
+                <button type="button" onclick="addQaPairRow()">+ 新增問答</button>
+                <button id="save-all-qa-btn" type="button" onclick="saveAllQaModifications()" style="margin-left: 10px;">儲存所有修改</button>
+                <div class="form-group" style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
+                    <label for="qa-file-input">或上傳檔案生成 (.sql):</label>
+                    <input type="file" id="qa-file-input" accept=".sql" onchange="handleQaFileUpload(event)">
                 </div>
-                <button id="save-all-qa-btn" type="button" onclick="saveAllQaModifications()" style="display: none; margin: 1em auto; padding: 0.8em 1.5em; font-size: 1.2em;">儲存所有修改</button>
+                <div id="qa-gen-log-container" style="margin-top: 1em; display: none;">
+                    <h4>生成日誌：</h4>
+                    <pre id="qa-gen-log"></pre>
+                </div>
             </div>
             <br>
-            <button id="train-model-btn" type="button" onclick="trainModel()" style="display: block; margin: 1em auto; padding: 0.8em 1.5em; font-size: 1.2em;">訓練模型</button>
-            <p id="training-info-text" style="text-align: center; font-size: 0.9em; color: #666;"></p>
-            <div id="train-progress-container" class="progress-container" style="display: none;">
-                <div class="progress-bar"></div>
-                <span class="progress-text"></span>
-            </div>
+
+            <button id="train-model-btn" type="button" onclick="trainModel()" style="display: block; margin: 1em auto; padding: 0.8em 1.5em; font-size: 1.2em;">重新訓練整個模型</button>
             <div id="training-log-container" style="margin-top: 1em; display: none;">
                 <h4>訓練日誌：</h4>
-                <pre id="training-log" style="background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap;"></pre>
+                <pre id="training-log"></pre>
+            </div>
+            
+            <hr style="margin: 2em 0;">
+
+            <div id="auto-analysis-section">
+                <h3>資料庫自動分析</h3>
+                <p>點擊按鈕，讓 AI 自動分析當前資料庫的結構，並生成建議文件。</p>
+                <button id="analyze-schema-btn" type="button" onclick="analyzeSchema()">自動分析資料庫結構</button>
+                <div id="schema-analysis-output" style="margin-top: 1em;"></div>
             </div>
         </div>
 
-        <!-- Section 3: Ask a Question -->
-        <div class="section">
-            <h2>3. 提出問題</h2>
-            <input type="text" id="question-input" style="width: 80%;" placeholder="例如：銷量前五的產品是什麼？">
-            <button onclick="ask()">提問</button>
-            
-            <div style="margin-top: 20px;">
-                <h3>資料庫 Schema <button onclick="loadSchema()" style="font-size: 0.8em; padding: 2px 5px;">重新整理</button></h3>
-                <div id="schema-selector-container" style="margin-bottom: 10px;"></div>
-                <pre id="schema-output" style="background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 10px; max-height: 250px; overflow: auto; white-space: pre-wrap;"></pre>
-            </div>
+        <div id="documentation-output-section" class="section" style="display: none;">
+            <h2>資料庫結構分析</h2>
+            <pre id="documentation-output" style="white-space: pre-wrap; background-color: #f8f8f8; padding: 1em; border-radius: 4px;"></pre>
+        </div>
 
-            <div style="margin-top: 20px;">
-                <h3>思考過程：</h3>
-                <pre id="thinking-output" style="background-color: #e9e9e9; border-left: 3px solid #f36d33; padding: 10px; white-space: pre-wrap; min-height: 80px;"></pre>
-                <h3>生成的 SQL (可編輯)：</h3>
-                <textarea id="sql-output" style="width: 95%; height: 150px; white-space: pre-wrap; overflow-x: auto;"></textarea>
-                <button id="execute-sql-btn" type="button" onclick="executeSql()" style="display:none; margin-top: 10px;">執行 SQL</button>
-                <h3>結果：</h3>
-                <pre id="result-output" style="white-space: pre-wrap; overflow-x: auto; min-height: 80px;"></pre>
+        <div id="ask-section" class="section" style="display: none;">
+            <h2>提出問題</h2>
+            <p>模型訓練完成後，您可以在這裡對您的資料庫提問。</p>
+            <div class="form-group">
+                <textarea id="question-input" placeholder="在這裡輸入您的問題..."></textarea>
+            </div>
+            <button id="ask-button" onclick="ask()">提出問題</button>
+            <div id="results-container" style="margin-top: 1.5em;">
+                <div id="thinking-container" style="display: none;">
+                    <h3>思考過程：</h3>
+                    <pre id="thinking-output"></pre>
+                </div>
+                <div id="sql-container" style="display: none;">
+                    <h3>生成的 SQL：</h3>
+                    <pre id="sql-output"></pre>
+                    <button id="execute-sql-button" onclick="executeSql()" style="display: none;">執行 SQL</button>
+                </div>
+                <div id="result-container" style="display: none;">
+                    <h3>查詢結果：</h3>
+                    <pre id="result-output"></pre>
+                </div>
             </div>
         </div>
     </div>
 
-    <script>
-        // Global State
-        let fullQaData = [];
-        let datasets = [];
-        let activeDatasetId = null;
-        let currentPage = 1;
-        let rowsPerPage = 10;
-        let dbConfig = {};
-        let fullSchema = {};
-        let fullDdl = [];
-
-        // --- Dataset Management ---
-        function openNewDatasetModal() {
-            document.getElementById('new-dataset-modal').style.display = 'flex';
-        }
-
-        function closeNewDatasetModal() {
-            document.getElementById('new-dataset-modal').style.display = 'none';
-            document.getElementById('new-dataset-form').reset();
-        }
-
-        async function handleNewDatasetSubmit() {
-            const form = document.getElementById('new-dataset-form');
-            const datasetName = document.getElementById('new-dataset-name').value;
-            const files = document.getElementById('new-dataset-files').files;
-
-            if (!datasetName || files.length === 0) {
-                alert('請提供資料集名稱並選擇至少一個 CSV 檔案。');
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('dataset_name', datasetName);
-            for (const file of files) {
-                formData.append('files', file);
-            }
-
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = true;
-            submitBtn.textContent = '上傳中...';
-
-            try {
-                const response = await fetch('/api/datasets', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const result = await response.json();
-                if (response.ok) {
-                    alert('資料集創建成功！');
-                    closeNewDatasetModal();
-                    await loadDatasets();
-                } else {
-                    throw new Error(result.message || '創建失敗。');
-                }
-            } catch (error) {
-                alert('創建資料集時發生錯誤：' + error.message);
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = '上傳並創建';
-            }
-        }
-
-        async function loadDatasets() {
-            try {
-                const response = await fetch('/api/datasets');
-                const result = await response.json();
-                if (response.ok) {
-                    datasets = result.datasets || [];
-                    renderDatasets();
-                } else {
-                    throw new Error(result.message);
-                }
-            } catch (error) {
-                console.error('無法載入資料集列表:', error);
-            }
-        }
-
-        function renderDatasets() {
-            const container = document.getElementById('dataset-list-container');
-            container.innerHTML = '';
-
-            if (datasets.length === 0) {
-                container.innerHTML = '<p>尚未創建任何資料集。</p>';
-                return;
-            }
-
-            const table = document.createElement('table');
-            table.style.width = '100%';
-            table.innerHTML = `
-                <thead>
-                    <tr>
-                        <th>資料集名稱</th>
-                        <th>創建時間</th>
-                        <th>狀態</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-            `;
-            const tbody = document.createElement('tbody');
-            
-            datasets.forEach(ds => {
-                const row = tbody.insertRow();
-                row.style.backgroundColor = ds.id === activeDatasetId ? '#e0ffe0' : 'transparent';
-                
-                row.insertCell().textContent = ds.dataset_name;
-                row.insertCell().textContent = new Date(ds.created_at).toLocaleString();
-                row.insertCell().textContent = ds.id === activeDatasetId ? '已激活' : '未激活';
-                
-                const actionCell = row.insertCell();
-                if (ds.id !== activeDatasetId) {
-                    const activateBtn = document.createElement('button');
-                    activateBtn.textContent = '激活';
-                    activateBtn.onclick = () => activateDataset(ds.id);
-                    actionCell.appendChild(activateBtn);
-                }
-
-                const deleteBtn = document.createElement('button');
-                deleteBtn.textContent = '刪除';
-                deleteBtn.style.marginLeft = '5px';
-                deleteBtn.onclick = () => deleteDataset(ds.id, ds.dataset_name);
-                actionCell.appendChild(deleteBtn);
-            });
-
-            table.appendChild(tbody);
-            container.appendChild(table);
-        }
-
-        async function activateDataset(datasetId) {
-            try {
-                const response = await fetch('/api/datasets/activate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ dataset_id: datasetId })
-                });
-                const result = await response.json();
-
-                if (response.ok) {
-                    alert(result.message);
-                    activeDatasetId = result.active_dataset_id;
-                    
-                    fullSchema = result.schema || {};
-                    fullDdl = result.ddl || [];
-                    populateSchemaSelector(Object.keys(fullSchema));
-                    displaySelectedTableSchema(); 
-
-                    document.getElementById('correction-rules-section').style.display = 'block';
-
-                    renderDatasets();
-                    loadInitialData(datasetId); // Re-add this call
-                    checkTrainingStatus(); // Re-check status after activating
-                } else {
-                    throw new Error(result.message);
-                }
-            } catch (error) {
-                alert('激活資料集失敗：' + error.message);
-            }
-        }
-
-        async function deleteDataset(datasetId, datasetName) {
-            if (!confirm(`確定要永久刪除資料集 "${datasetName}" 嗎？此操作無法復原。`)) {
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/datasets/${datasetId}`, {
-                    method: 'DELETE'
-                });
-                const result = await response.json();
-
-                if (response.ok) {
-                    alert(result.message);
-                    if (activeDatasetId === datasetId) {
-                        activeDatasetId = null;
-                        clearTrainingInputs();
-                    }
-                    await loadDatasets();
-                } else {
-                    throw new Error(result.message);
-                }
-            } catch (error) {
-                alert('刪除資料集失敗：' + error.message);
-            }
-        }
-
-        // --- Training Data Management ---
-        function clearTrainingInputs() {
-            document.getElementById('ddl-input').value = '';
-            document.getElementById('doc-input').value = '';
-            fullQaData = [];
-            renderQaTable();
-            
-            fullSchema = {};
-            fullDdl = [];
-            document.getElementById('schema-selector-container').innerHTML = '';
-            document.getElementById('schema-output').textContent = '無可用 Schema。請先連接並激活一個資料集。';
-            
-            document.getElementById('correction-rules-section').style.display = 'none';
-        }
-
-        async function loadInitialData(datasetId) {
-            if (!datasetId) {
-                clearTrainingInputs();
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/training_data`); 
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.message || 'Failed to load training data.');
-                }
-                
-                const ddlInput = document.getElementById('ddl-input');
-                // Only populate DDL if the textarea is currently empty.
-                if (data.ddl && data.ddl.length > 0 && ddlInput.value.trim() === '') {
-                    ddlInput.value = data.ddl.join('\n\n');
-                }
-
-                // Load documentation
-                const docInput = document.getElementById('doc-input');
-                if (data.documentation && data.documentation.length > 0) {
-                    docInput.value = data.documentation.join('\n\n');
-                } else {
-                    docInput.value = '';
-                }
-
-                // Load QA pairs
-                fullQaData = data.qa_pairs || [];
-                currentPage = 1;
-                renderQaTable();
-
-            } catch (error) {
-                console.error('Error loading initial data for dataset:', error);
-                alert(`為資料集載入訓練資料時發生錯誤: ${error.message}`);
-            }
-        }
-
-        // --- QA Table & Generation ---
-        function renderQaTable() {
-            const tableBody = document.getElementById('qa-table-body');
-            const pageInfo = document.getElementById('page-info');
-            const prevBtn = document.getElementById('prev-page-btn');
-            const nextBtn = document.getElementById('next-page-btn');
-
-            tableBody.innerHTML = '';
-
-            if (fullQaData.length === 0) {
-                pageInfo.textContent = '沒有數據';
-                prevBtn.style.display = 'none';
-                nextBtn.style.display = 'none';
-                return;
-            }
-
-            const totalPages = Math.ceil(fullQaData.length / rowsPerPage);
-            currentPage = Math.max(1, Math.min(currentPage, totalPages));
-
-            const start = (currentPage - 1) * rowsPerPage;
-            const end = start + rowsPerPage;
-            const paginatedItems = fullQaData.slice(start, end);
-
-            paginatedItems.forEach(item => {
-                const row = tableBody.insertRow();
-                const qaId = item.id;
-
-                const questionCell = row.insertCell();
-                const questionTextarea = document.createElement('textarea');
-                questionTextarea.value = item.question;
-                questionTextarea.onchange = (e) => {
-                    const itemToUpdate = fullQaData.find(d => (d.id && d.id === qaId) || d === item);
-                    if (itemToUpdate) itemToUpdate.question = e.target.value;
-                };
-                questionTextarea.rows = 3;
-                questionTextarea.style.width = '100%';
-                questionCell.appendChild(questionTextarea);
-
-                const sqlCell = row.insertCell();
-                const sqlPre = document.createElement('pre');
-                sqlPre.textContent = item.sql;
-                sqlCell.appendChild(sqlPre);
-            });
-
-            pageInfo.textContent = `第 ${currentPage} / ${totalPages} 頁 (共 ${fullQaData.length} 項)`;
-            prevBtn.style.display = 'inline-block';
-            nextBtn.style.display = 'inline-block';
-            prevBtn.disabled = currentPage === 1;
-            nextBtn.disabled = currentPage === totalPages;
-        }
-
-        function prevPage() {
-            if (currentPage > 1) {
-                currentPage--;
-                renderQaTable();
-            }
-        }
-
-        function nextPage() {
-            const totalPages = Math.ceil(fullQaData.length / rowsPerPage);
-            if (currentPage < totalPages) {
-                currentPage++;
-                renderQaTable();
-            }
-        }
-        
-        async function generateQaFromSql() {
-            const fileInput = document.getElementById('qa-file-input');
-            const file = fileInput.files[0];
-            const generateBtn = document.querySelector('button[onclick="generateQaFromSql()"]');
-
-            if (!file) {
-                alert('請先選擇一個 .sql 或 .json 檔案。');
-                return;
-            }
-
-            const progressContainer = document.getElementById('qa-gen-progress-container');
-            const progressBar = progressContainer.querySelector('.progress-bar');
-            const progressText = progressContainer.querySelector('.progress-text');
-
-            generateBtn.disabled = true;
-            generateBtn.textContent = '生成中...';
-            progressContainer.style.display = 'block';
-            progressBar.style.width = '0%';
-            progressText.textContent = '正在上傳與處理...';
-            fullQaData = [];
-            renderQaTable();
-            
-            const formData = new FormData();
-            formData.append('sql_file', file);
-
-            try {
-                const response = await fetch('/api/generate_qa_from_sql', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.message || `HTTP error! status: ${response.status}`);
-                }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            const jsonString = line.substring(6);
-                            if (jsonString) {
-                                try {
-                                    const data = JSON.parse(jsonString);
-                                    
-                                    if (data.status === 'progress' && data.qa_pair) {
-                                        const percentage = data.total > 0 ? (data.count / data.total) * 100 : 0;
-                                        progressBar.style.width = percentage + '%';
-                                        progressText.textContent = `正在生成: ${data.count} / ${data.total}`;
-                                        fullQaData.push(data.qa_pair);
-                                        renderQaTable();
-                                    } else if (data.status === 'completed') {
-                                        progressBar.style.width = '100%';
-                                        progressText.textContent = '完成！';
-                                        setTimeout(() => {
-                                            alert(data.message || '問答配對已全部生成！');
-                                            progressContainer.style.display = 'none';
-                                            document.getElementById('save-all-qa-btn').style.display = 'block';
-                                        }, 300);
-                                    } else if (data.status === 'error') {
-                                        throw new Error(data.message);
-                                    } else if (data.status === 'error_partial') {
-                                        console.warn(`Could not generate question for SQL: ${data.sql}. Reason: ${data.message}`);
-                                    }
-                                } catch (e) {
-                                    console.error("Error parsing stream JSON:", e, "JSON string:", jsonString);
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                alert('生成失敗：' + error.message);
-                progressContainer.style.display = 'none';
-            } finally {
-                generateBtn.disabled = false;
-                generateBtn.textContent = '從 SQL 生成問答';
-            }
-        }
-
-        async function saveAllQaModifications() {
-            const saveAllBtn = document.getElementById('save-all-qa-btn');
-            saveAllBtn.disabled = true;
-            saveAllBtn.textContent = '儲存中...';
-
-            let successCount = 0;
-            let errorCount = 0;
-
-            for (let i = 0; i < fullQaData.length; i++) {
-                const item = fullQaData[i];
-                try {
-                    const response = item.id 
-                        ? await fetch('/api/update_qa_question', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ id: item.id, question: item.question })
-                          })
-                        : await fetch('/api/add_qa_question', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ question: item.question, sql: item.sql })
-                          });
-                    
-                    const result = await response.json();
-                    if (response.ok) {
-                        if (!item.id && result.id) item.id = result.id;
-                        successCount++;
-                    } else {
-                        errorCount++;
-                    }
-                } catch (error) {
-                    errorCount++;
-                }
-            }
-
-            saveAllBtn.textContent = `儲存完成 (${successCount} 成功, ${errorCount} 失敗)`;
-            setTimeout(() => {
-                saveAllBtn.textContent = '儲存所有修改';
-                saveAllBtn.disabled = false;
-            }, 3000);
-            alert(`所有修改已處理完畢：${successCount} 成功，${errorCount} 失敗。`);
-        }
-
-        // --- Model Training ---
-        async function trainModel() {
-            const trainBtn = document.getElementById('train-model-btn');
-            const progressContainer = document.getElementById('train-progress-container');
-            const progressBar = progressContainer.querySelector('.progress-bar');
-            const progressText = progressContainer.querySelector('.progress-text');
-            const logContainer = document.getElementById('training-log-container');
-            const logOutput = document.getElementById('training-log');
-
-            if (!activeDatasetId) {
-                alert('請先激活一個資料集才能開始訓練。');
-                return;
-            }
-
-            trainBtn.disabled = true;
-            trainBtn.textContent = '訓練中...';
-            progressContainer.style.display = 'block';
-            progressBar.style.width = '0%';
-            progressText.textContent = '正在準備...';
-            logContainer.style.display = 'block';
-            logOutput.textContent = '';
-
-            function addLog(message) {
-                logOutput.textContent += message + '\n';
-                logOutput.scrollTop = logOutput.scrollHeight;
-            }
-
-            try {
-                const response = await fetch('/api/train', {
-                    method: 'POST',
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.message || `HTTP error! status: ${response.status}`);
-                }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) {
-                        addLog('✅ 訓練流程已完成。');
-                        progressBar.style.width = '100%';
-                        progressText.textContent = '完成！';
-                        alert('模型訓練成功！');
-                        break;
-                    }
-                    
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            const jsonString = line.substring(6);
-                            if (jsonString) {
-                                try {
-                                    const data = JSON.parse(jsonString);
-                                    if (data.percentage !== undefined && data.message) {
-                                        progressBar.style.width = data.percentage + '%';
-                                        progressText.textContent = `${data.message} (${Math.round(data.percentage)}%)`;
-                                        addLog(`[${Math.round(data.percentage)}%] ${data.message}`);
-                                    }
-                                    if (data.status === 'completed') {
-                                        // Final message is handled in the 'done' block
-                                    }
-                                } catch (e) {
-                                    console.error("Error parsing stream JSON:", e, "JSON string:", jsonString);
-                                    addLog(`[錯誤] 無法解析日誌訊息: ${jsonString}`);
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                const errorMessage = '訓練失敗：' + error.message;
-                alert(errorMessage);
-                addLog(`❌ ${errorMessage}`);
-            } finally {
-                trainBtn.disabled = false;
-                trainBtn.textContent = '重新訓練模型';
-                progressText.textContent = '完成';
-            }
-        }
-
-        // --- Ask Vanna ---
-        async function ask() {
-            if (!activeDatasetId) {
-                alert('請先從上方列表中選擇並激活一個資料集！');
-                return;
-            }
-            const question = document.getElementById('question-input').value;
-            const askBtn = document.querySelector('button[onclick="ask()"]');
-            const thinkingOutput = document.getElementById('thinking-output');
-            const sqlOutput = document.getElementById('sql-output');
-            const resultOutput = document.getElementById('result-output');
-
-            if (!question) {
-                alert('請輸入一個問題。');
-                return;
-            }
-
-            thinkingOutput.textContent = '';
-            sqlOutput.value = '';
-            resultOutput.textContent = '';
-            document.getElementById('execute-sql-btn').style.display = 'none';
-            askBtn.disabled = true;
-            askBtn.textContent = '思考中...';
-
-            try {
-                const response = await fetch('/api/ask', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question: question })
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.message || `HTTP error! status: ${response.status}`);
-                }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) {
-                        if (thinkingOutput.textContent === '') {
-                            thinkingOutput.textContent = '思考過程：模型正在分析您的問題...\n可能是初次運行，模型需要一些時間來生成思考過程。';
-                        }
-                        break;
-                    }
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            const jsonString = line.substring(6);
-                            if (jsonString) {
-                                try {
-                                    const data = JSON.parse(jsonString);
-                                    console.log('Received data:', data); // 添加日志以便调试
-                                    if (data.type === 'thinking_step') {
-                                        thinkingOutput.textContent += data.content;
-                                        // 确保内容可见
-                                        thinkingOutput.scrollTop = thinkingOutput.scrollHeight;
-                                    } else if (data.type === 'sql_result') {
-                                        sqlOutput.value = data.sql;
-                                        document.getElementById('execute-sql-btn').style.display = 'inline-block';
-                                    } else if (data.type === 'error') {
-                                        resultOutput.textContent = '發生錯誤：\n' + data.message;
-                                    } else if (data.type === 'log_message') {
-                                        // 如果有日志消息，也添加到思考过程中
-                                        thinkingOutput.textContent += '\n[日志] ' + data.content;
-                                    }
-                                } catch (e) {
-                                    console.error("Error parsing stream JSON:", e, "JSON string:", jsonString);
-                                    // 显示解析错误，帮助调试
-                                    thinkingOutput.textContent += '\n[解析错误] ' + e.message + ' 原始数据: ' + jsonString.substring(0, 100) + '...';
-                                }
-                            }
-                        } else if (line.trim() !== '') {
-                            // 如果不是标准的SSE格式，也尝试添加到思考过程中
-                            console.log('Non-SSE line:', line);
-                            thinkingOutput.textContent += '\n[非标准数据] ' + line;
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error('Ask function error:', error);
-                resultOutput.textContent = '發生錯誤：' + error.message;
-                thinkingOutput.textContent = '思考過程未能顯示，原因：' + error.message;
-            } finally {
-                askBtn.disabled = false;
-                askBtn.textContent = '提問';
-            }
-        }
-
-        async function executeSql() {
-            const sql = document.getElementById('sql-output').value;
-            const executeBtn = document.getElementById('execute-sql-btn');
-            const resultOutput = document.getElementById('result-output');
-
-            if (!sql) {
-                alert('沒有 SQL 可以執行。');
-                return;
-            }
-
-            executeBtn.disabled = true;
-            executeBtn.textContent = '執行中...';
-            resultOutput.textContent = '正在執行查詢...';
-
-            try {
-                const response = await fetch('/api/execute_sql', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sql: sql })
-                });
-
-                const result = await response.json();
-                if (response.ok && result.status === 'success') {
-                    resultOutput.textContent = result.data;
-                } else {
-                    throw new Error(result.message || '執行 SQL 時發生未知錯誤。');
-                }
-            } catch (error) {
-                resultOutput.textContent = '執行失敗：\n' + error.message;
-            } finally {
-                executeBtn.disabled = false;
-                executeBtn.textContent = '執行 SQL';
-            }
-        }
-
-        // --- Schema Display ---
-        function populateSchemaSelector(tableNames) {
-            const container = document.getElementById('schema-selector-container');
-            container.innerHTML = ''; // Clear previous selector
-
-            if (!tableNames || tableNames.length === 0) {
-                return;
-            }
-
-            const select = document.createElement('select');
-            select.id = 'schema-table-selector';
-            select.style.width = '100%';
-            select.onchange = displaySelectedTableSchema;
-
-            tableNames.forEach(tableName => {
-                const option = document.createElement('option');
-                option.value = tableName;
-                option.textContent = tableName;
-                select.appendChild(option);
-            });
-
-            container.appendChild(select);
-        }
-
-        function displaySelectedTableSchema() {
-            const selector = document.getElementById('schema-table-selector');
-            const schemaOutput = document.getElementById('schema-output');
-            const ddlInput = document.getElementById('ddl-input');
-
-            if (!selector || !selector.value) {
-                schemaOutput.textContent = '請從上方選擇一個資料表。';
-                ddlInput.value = '';
-                return;
-            }
-
-            const selectedTable = selector.value;
-
-            if (fullSchema[selectedTable]) {
-                let schemaText = `${selectedTable}\n`;
-                fullSchema[selectedTable].forEach(col => {
-                    schemaText += `  - ${col}\n`;
-                });
-                schemaOutput.textContent = schemaText.trim();
-            } else {
-                schemaOutput.textContent = `找不到資料表 "${selectedTable}" 的 Schema。`;
-            }
-
-            const ddlStatement = fullDdl.find(ddl => {
-                const regex = new RegExp(`CREATE\\s+TABLE\\s+["'\`]?${selectedTable}["'\`]?`, 'i');
-                return regex.test(ddl);
-            });
-
-            if (ddlStatement) {
-                ddlInput.value = ddlStatement;
-            } else {
-                ddlInput.value = `/* 找不到資料表 "${selectedTable}" 的 DDL。 */`;
-            }
-        }
-
-        async function loadSchema() {
-            const schemaOutput = document.getElementById('schema-output');
-            schemaOutput.textContent = '載入中...';
-            document.getElementById('schema-selector-container').innerHTML = '';
-
-            try {
-                const response = await fetch('/api/schema');
-                const result = await response.json();
-
-                if (response.ok) {
-                    if (result.schema && Object.keys(result.schema).length > 0) {
-                        fullSchema = result.schema;
-                        fullDdl = result.ddl || [];
-                        populateSchemaSelector(Object.keys(fullSchema));
-                        displaySelectedTableSchema();
-                    } else {
-                        schemaOutput.textContent = '無可用 Schema。請先連接並激活一個資料集。';
-                        document.getElementById('ddl-input').value = '';
-                        fullSchema = {};
-                        fullDdl = [];
-                    }
-                } else {
-                    throw new Error(result.message || 'Failed to load schema.');
-                }
-            } catch (error) {
-                schemaOutput.textContent = '載入 Schema 失敗：\n' + error.message;
-            }
-        }
-
-        // --- Correction Rules ---
-        async function loadCorrectionRules() {
-            try {
-                const response = await fetch('/api/correction_rules');
-                const result = await response.json();
-                if (response.ok) {
-                    renderCorrectionRules(result.rules);
-                } else {
-                    throw new Error(result.message || 'Failed to load correction rules.');
-                }
-            } catch (error) {
-                console.error('Error loading correction rules:', error);
-            }
-        }
-
-        function renderCorrectionRules(rules) {
-            const tableBody = document.getElementById('correction-rules-body');
-            tableBody.innerHTML = '';
-            if (!rules || rules.length === 0) {
-                tableBody.innerHTML = '<tr><td colspan="3">沒有校對規則。</td></tr>';
-                return;
-            }
-            rules.forEach(rule => {
-                const row = tableBody.insertRow();
-                row.insertCell().textContent = rule.incorrect_name;
-                row.insertCell().textContent = rule.correct_name;
-                const actionCell = row.insertCell();
-                const deleteBtn = document.createElement('button');
-                deleteBtn.textContent = '刪除';
-                deleteBtn.onclick = () => deleteCorrectionRule(rule.id);
-                actionCell.appendChild(deleteBtn);
-            });
-        }
-
-        async function addCorrectionRule() {
-            const incorrectName = document.getElementById('incorrect-name').value.trim();
-            const correctName = document.getElementById('correct-name').value.trim();
-
-            if (!incorrectName || !correctName) {
-                alert('請填寫錯誤的名稱和正確的名稱。');
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/correction_rules', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ incorrect_name: incorrectName, correct_name: correctName })
-                });
-                const result = await response.json();
-                if (response.ok) {
-                    alert('規則新增成功！');
-                    document.getElementById('correction-rule-form').reset();
-                    loadCorrectionRules();
-                } else {
-                    throw new Error(result.message || '新增失敗。');
-                }
-            } catch (error) {
-                alert('新增規則時發生錯誤：' + error.message);
-            }
-        }
-
-        async function deleteCorrectionRule(ruleId) {
-            if (!confirm('確定要刪除這個規則嗎？')) {
-                return;
-            }
-            try {
-                const response = await fetch(`/api/correction_rules/${ruleId}`, {
-                    method: 'DELETE'
-                });
-                const result = await response.json();
-                if (response.ok) {
-                    alert('規則刪除成功！');
-                    loadCorrectionRules();
-                } else {
-                    throw new Error(result.message || '刪除失敗。');
-                }
-            } catch (error) {
-                alert('刪除規則時發生錯誤：' + error.message);
-            }
-        }
-
-        async function checkTrainingStatus() {
-            try {
-                const response = await fetch('/api/training_status');
-                const data = await response.json();
-                if (response.ok && data.has_trained_data) {
-                    document.getElementById('train-model-btn').textContent = '重新訓練模型';
-                    document.getElementById('training-info-text').textContent = '偵測到已有訓練資料。提交新的資料將會在此基礎上進行增量訓練。';
-                } else {
-                    document.getElementById('train-model-btn').textContent = '訓練模型';
-                    document.getElementById('training-info-text').textContent = '首次訓練將會初始化您的專屬模型。';
-                }
-            } catch (error) {
-                console.error('Error checking training status:', error);
-            }
-        }
-
-        async function saveDdl() {
-            if (!activeDatasetId) {
-                alert('請先激活一個資料集。');
-                return;
-            }
-            const ddlContent = document.getElementById('ddl-input').value;
-            if (!ddlContent.trim()) {
-                alert('DDL 內容不能為空。');
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/save_ddl', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ddl: ddlContent })
-                });
-                const result = await response.json();
-                if (response.ok) {
-                    alert('DDL 已成功儲存！');
-                } else {
-                    throw new Error(result.message || '儲存失敗。');
-                }
-            } catch (error) {
-                alert('儲存 DDL 時發生錯誤：' + error.message);
-            }
-        }
-
-        async function saveDocumentation() {
-            if (!activeDatasetId) {
-                alert('請先激活一個資料集。');
-                return;
-            }
-            const docContent = document.getElementById('doc-input').value;
-
-            try {
-                const response = await fetch('/api/save_documentation', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ documentation: docContent })
-                });
-                const result = await response.json();
-                if (response.ok) {
-                    alert('文件已成功儲存！');
-                } else {
-                    throw new Error(result.message || '儲存失敗。');
-                }
-            } catch (error) {
-                alert('儲存文件時發生錯誤：' + error.message);
-            }
-        }
-
-        // --- Page Load ---
-        window.addEventListener('load', () => {
-            clearTrainingInputs();
-            loadDatasets();
-            loadCorrectionRules();
-            loadSchema();
-            checkTrainingStatus();
-            
-            document.getElementById('doc-file-input').addEventListener('change', function(event) {
-                const file = event.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const docTextarea = document.getElementById('doc-input');
-                    docTextarea.value += (docTextarea.value ? '\n\n' : '') + e.target.result;
-                };
-                reader.readAsText(file);
-            });
-
-            document.getElementById('ddl-file-input').addEventListener('change', function(event) {
-                const file = event.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const ddlTextarea = document.getElementById('ddl-input');
-                    ddlTextarea.value += (ddlTextarea.value ? '\n\n' : '') + e.target.result;
-                };
-                reader.readAsText(file);
-            });
-        });
-    </script>
-
     <!-- New Dataset Modal -->
-    <div id="new-dataset-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background-color:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
-        <div style="background:white; padding:2em; border-radius:5px; width:500px;">
+    <div id="new-dataset-modal" class="modal">
+        <div class="modal-content">
             <h2>新增資料集</h2>
             <form id="new-dataset-form" onsubmit="return false;">
                 <p>為您的資料集命名，並選擇多個要上傳的 CSV 檔案。</p>
                 <label for="new-dataset-name">資料集名稱:</label><br>
                 <input type="text" id="new-dataset-name" name="dataset_name" required style="width:95%; margin-bottom:1em;"><br><br>
-                
                 <label for="new-dataset-files">選擇 CSV 檔案 (可多選):</label><br>
                 <input type="file" id="new-dataset-files" name="files" multiple accept=".csv"><br><br>
-                
                 <div style="text-align:right;">
                     <button type="button" onclick="closeNewDatasetModal()">取消</button>
-                    <button type="submit" onclick="handleNewDatasetSubmit()">上傳並創建</button>
+                    <button type="submit" id="new-dataset-submit-btn">上傳並創建</button>
                 </div>
             </form>
         </div>
     </div>
+
+    <script src="/static/script.js"></script>
 </body>
 </html>
