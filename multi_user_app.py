@@ -15,11 +15,22 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DatabaseError, OperationalError
 from queue import Queue
 from threading import Thread
+import traceback
 
 # Helper function to load prompt templates
 def load_prompt_template(filename):
-    with open(os.path.join('prompts', 'prompts', filename), 'r', encoding='utf-8') as f:
-        return f.read()
+    # Check if the file exists in prompts/prompts first, then in prompts/
+    path_in_subfolder = os.path.join('prompts', 'prompts', filename)
+    path_in_root = os.path.join('prompts', filename)
+
+    if os.path.exists(path_in_subfolder):
+        with open(path_in_subfolder, 'r', encoding='utf-8') as f:
+            return f.read()
+    elif os.path.exists(path_in_root):
+        with open(path_in_root, 'r', encoding='utf-8') as f:
+            return f.read()
+    else:
+        raise FileNotFoundError(f"Prompt template file not found: {filename}")
 
 # Add 'src' to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
@@ -87,11 +98,33 @@ def init_training_db(user_id: str):
 class MyVanna(Ollama, ChromaDB_VectorStore):
     def __init__(self, user_id: str, config=None):
         self.log_queue = Queue()
+        self.user_id = user_id  # Store user_id as an instance attribute
         model = os.getenv('OLLAMA_MODEL')
         if not model: raise ValueError("OLLAMA_MODEL not set.")
         ollama_host = os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434')
         Ollama.__init__(self, config={'model': model, 'ollama_host': ollama_host})
         ChromaDB_VectorStore.__init__(self, config={'collection_name': f"vanna_training_data_{user_id}"})
+        
+        # Store original methods to call them and log their results
+        # Use super() to get the methods from the base classes (Ollama or ChromaDB_VectorStore)
+        self._original_get_similar_question_sql = super().get_similar_question_sql
+        self._original_get_related_ddl = super().get_related_ddl
+        self._original_get_related_documentation = super().get_related_documentation
+
+    def get_similar_question_sql(self, question: str, **kwargs):
+        results = self._original_get_similar_question_sql(question, **kwargs)
+        self.log_queue.put({'type': 'thinking_step', 'step': '相似問題檢索', 'details': results})
+        return results
+
+    def get_related_ddl(self, question: str, **kwargs):
+        results = self._original_get_related_ddl(question, **kwargs)
+        self.log_queue.put({'type': 'thinking_step', 'step': 'DDL 檢索', 'details': results})
+        return results
+
+    def get_related_documentation(self, question: str, **kwargs):
+        results = self._original_get_related_documentation(question, **kwargs)
+        self.log_queue.put({'type': 'thinking_step', 'step': '文件檢索', 'details': results})
+        return results
 
     def log(self, message: str, title: str = "Info"):
         self.log_queue.put({'type': 'thinking_step', 'step': title, 'details': message})
@@ -103,8 +136,7 @@ Ollama._Ollama__pull_model_if_ne = _noop_pull_model
 def get_vanna_instance(user_id: str) -> MyVanna:
     return MyVanna(user_id=user_id)
 
-def configure_vanna_for_request(vn, user_id):
-    dataset_id = session.get('active_dataset_id')
+def configure_vanna_for_request(vn, user_id, dataset_id): # Add dataset_id as a parameter
     if not dataset_id:
         raise Exception("No active dataset selected.")
     
@@ -191,7 +223,7 @@ def activate_dataset():
     try:
         session['active_dataset_id'] = dataset_id
         vn = get_vanna_instance(user_id)
-        vn = configure_vanna_for_request(vn, user_id)
+        vn = configure_vanna_for_request(vn, user_id, dataset_id) # Pass dataset_id
         
         inspector = inspect(vn.engine)
         table_names = inspector.get_table_names()
@@ -379,31 +411,97 @@ def ask_question():
         return jsonify({'status': 'error', 'message': 'Question is required.'}), 400
 
     vn = get_vanna_instance(user_id)
-    
-    def run_vanna_in_thread(question):
+    dataset_id = session.get('active_dataset_id') # Get dataset_id from session
+
+    def run_vanna_in_thread(question, user_id, dataset_id): # Add user_id and dataset_id as parameters
         try:
-            vn_thread = configure_vanna_for_request(get_vanna_instance(user_id), user_id)
+            # Pass user_id and dataset_id to configure_vanna_for_request
+            vn_thread = configure_vanna_for_request(get_vanna_instance(user_id), user_id, dataset_id)
+            
+            # Generate SQL and capture logs
+            vn.log_queue.put({'type': 'thinking_step', 'step': '開始生成 SQL 查詢', 'details': f"問題: {question}"})
             sql = vn_thread.generate_sql(question=question)
             vn.log_queue.put({'type': 'sql_result', 'sql': sql})
+
+            # Collect all logs generated during SQL generation
+            logs = []
+            while not vn.log_queue.empty():
+                log_item = vn.log_queue.get()
+                if log_item['type'] == 'thinking_step':
+                    logs.append(log_item)
+                else:
+                    # Re-add other types of logs if they are needed later in the stream
+                    vn.log_queue.put(log_item)
+
+            # Format logs for the analysis prompt
+            similar_qa_str = ""
+            related_ddl_str = ""
+            related_docs_str = ""
+
+            for log_item in logs:
+                if log_item['step'] == '相似問題檢索':
+                    if log_item['details']:
+                        for qa in log_item['details']:
+                            similar_qa_str += f"| {qa['question']} | {qa['sql']} |\n"
+                    else:
+                        similar_qa_str = "無"
+                elif log_item['step'] == 'DDL 檢索':
+                    related_ddl_str = "\n".join(log_item['details']) if log_item['details'] else "無"
+                elif log_item['step'] == '文件檢索':
+                    related_docs_str = "\n".join(log_item['details']) if log_item['details'] else "無"
+
+            # Load the analysis prompt template
+            ask_analysis_prompt_template = load_prompt_template('ask_analysis_prompt.txt')
+
+            # Construct the full prompt for the analysis LLM
+            analysis_prompt_content = f"""
+原始問題:
+{question}
+
+檢索到的相似問題與 SQL 範例:
+{similar_qa_str}
+
+檢索到的相關資料庫結構 (DDL):
+```sql
+{related_ddl_str}
+```
+
+檢索到的相關業務文件:
+{related_docs_str}
+"""
+            full_analysis_prompt = ask_analysis_prompt_template + analysis_prompt_content
+            vn.log_queue.put({'type': 'thinking_step', 'step': '分析提示詞', 'details': full_analysis_prompt})
+
+            # Call LLM to generate the analysis table
+            vn.log_queue.put({'type': 'thinking_step', 'step': '生成分析表', 'details': '正在呼叫 LLM...'})
+            analysis_table = vn_thread.submit_prompt([{'role': 'user', 'content': full_analysis_prompt}])
+            vn.log_queue.put({'type': 'analysis_result', 'analysis': analysis_table})
             
+            # Run SQL and get data result
+            vn.log_queue.put({'type': 'thinking_step', 'step': '執行 SQL 查詢', 'details': sql})
             df = vn_thread.run_sql(sql=sql)
             result_string = df.to_string()
             vn.log_queue.put({'type': 'data_result', 'data': result_string})
 
         except Exception as e:
-            vn.log_queue.put({'type': 'error', 'message': str(e)})
+            app.logger.error(f"Error in run_vanna_in_thread for user '{user_id}': {e}", exc_info=True)
+            vn.log_queue.put({'type': 'error', 'message': str(e), 'details': traceback.format_exc()})
         finally:
             vn.log_queue.put(None)
 
-    thread = Thread(target=run_vanna_in_thread, args=(question,))
+    thread = Thread(target=run_vanna_in_thread, args=(question, user_id, dataset_id)) # Pass user_id and dataset_id
     thread.start()
 
     def stream_logs():
+        app.logger.info("Starting stream_logs...")
         while True:
             item = vn.log_queue.get()
             if item is None:
+                app.logger.info("Stream ended.")
                 break
+            app.logger.info(f"Streaming item: {item['type']} - Details: {item.get('details', 'N/A')}")
             yield f"data: {json.dumps(item)}\n\n"
+        app.logger.info("stream_logs finished.")
 
     return Response(stream_with_context(stream_logs()), mimetype='text/event-stream')
 

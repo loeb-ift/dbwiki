@@ -592,6 +592,11 @@ async function ask() {
                             lastGeneratedSql = data.sql;
                             sqlOutput.textContent = lastGeneratedSql;
                             sqlContainer.style.display = 'block';
+                        } else if (data.type === 'analysis_result') {
+                            console.log('Received analysis_result:', data.analysis);
+                            document.getElementById('analysis-output').textContent = data.analysis;
+                            document.getElementById('analysis-container').style.display = 'block';
+                            console.log('analysis-container display:', document.getElementById('analysis-container').style.display);
                         } else if (data.type === 'data_result') {
                             resultOutput.textContent = data.data;
                             resultContainer.style.display = 'block';
