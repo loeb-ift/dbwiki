@@ -16,6 +16,11 @@ from sqlalchemy.exc import DatabaseError, OperationalError
 from queue import Queue
 from threading import Thread
 
+# Helper function to load prompt templates
+def load_prompt_template(filename):
+    with open(os.path.join('prompts', 'prompts', filename), 'r', encoding='utf-8') as f:
+        return f.read()
+
 # Add 'src' to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
 
@@ -419,27 +424,42 @@ def generate_qa_from_sql():
     sql_content = file.read().decode('utf-8')
 
     def stream_qa_generation(sql_content):
+        user_id = session['username']
+        dataset_id = session.get('active_dataset_id')
+        if not dataset_id:
+            yield f"data: {json.dumps({'status': 'error', 'message': 'No active dataset selected.'})}\n\n"
+            return
+
         try:
             vn = get_vanna_instance(user_id)
             vn = configure_vanna_for_request(vn, user_id)
             queries = [q.strip() for q in sql_content.split(';') if q.strip()]
             total_queries = len(queries)
-            yield f"data: {json.dumps({'status': 'starting', 'total': total_queries})}\n\n"
-            system_prompt = "You are an expert at guessing the business question that a SQL query is answering. The user will provide a SQL query. Your task is to return a single, concise business question, in Traditional Chinese (繁體中文), that the SQL query answers. Do not add any explanation or preamble."
+            yield f"data: {json.dumps({'status': 'starting', 'total': total_queries, 'message': '開始生成問答配對...'})}\n\n"
+            qa_system_prompt = load_prompt_template('qa_generation_system_prompt.txt')
             
-            for i, sql_query in enumerate(queries):
-                try:
-                    question = vn.submit_prompt([
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': sql_query}
-                    ])
-                    qa_pair = {'question': question, 'sql': sql_query}
-                except Exception as e:
-                    qa_pair = {'question': f"生成問題時發生錯誤: {str(e)}", 'sql': sql_query}
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                for i, sql_query in enumerate(queries):
+                    try:
+                        question = vn.submit_prompt([
+                            {'role': 'system', 'content': qa_system_prompt},
+                            {'role': 'user', 'content': sql_query}
+                        ])
+                        
+                        cursor.execute(
+                            "INSERT INTO training_qa (question, sql_query, table_name, dataset_id) VALUES (?, ?, ?, ?)",
+                            (question, sql_query, 'global', dataset_id)
+                        )
+                        conn.commit()
+                        
+                        percentage = int(((i + 1) / total_queries) * 100)
+                        yield f"data: {json.dumps({'status': 'progress', 'percentage': percentage, 'message': f'已生成 {i + 1}/{total_queries} 個問答配對', 'qa_pair': {'question': question, 'sql': sql_query}})}\n\n"
+                    except Exception as e:
+                        app.logger.error(f"Error generating QA for query '{sql_query}': {e}", exc_info=True)
+                        yield f"data: {json.dumps({'status': 'warning', 'message': f'生成問題時發生錯誤: {str(e)} (SQL: {sql_query[:50]}...)'})}\n\n"
                 
-                yield f"data: {json.dumps({'status': 'progress', 'count': i + 1, 'total': total_queries, 'qa_pair': qa_pair})}\n\n"
-            
-            yield f"data: {json.dumps({'status': 'completed', 'message': '問答配對已全部生成！'})}\n\n"
+            yield f"data: {json.dumps({'status': 'completed', 'percentage': 100, 'message': '問答配對已全部生成並儲存！'})}\n\n"
         except Exception as e:
             app.logger.error(f"An error occurred in stream_qa_generation: {e}", exc_info=True)
             yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
@@ -458,18 +478,8 @@ def generate_documentation():
     try:
         vn = get_vanna_instance(user_id)
         vn = configure_vanna_for_request(vn, user_id)
-        prompt = f"""
-        基於以下 DDL 語句：
-        ---
-        {ddl}
-        ---
-        請為我生成兩部分內容：
-
-        1.  **實體關係圖 (ER Model)**：使用純文字和 ASCII 字元，創建一個垂直的實體關係圖，清晰地展示資料表之間的關係 (例如 one-to-one, one-to-many)。
-        2.  **實體結構說明**：在圖表下方，用簡潔的業務術語逐點描述每個資料表及其主要用途。
-
-        請將這兩部分內容合併為一個單一的、格式化的純文字區塊返回，不要包含任何 Markdown 標籤。
-        """
+        documentation_prompt_content = load_prompt_template('documentation_prompt.txt')
+        prompt = documentation_prompt_content.format(ddl=ddl)
         documentation_text = vn.submit_prompt([{'role': 'user', 'content': prompt}])
 
         if documentation_text:
@@ -529,6 +539,25 @@ def analyze_schema():
     except Exception as e:
         app.logger.error(f"Schema analysis failed for user '{user_id}': {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/delete_all_qa', methods=['POST'])
+@api_login_required
+def delete_all_qa():
+    user_id = session['username']
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
+    try:
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM training_qa WHERE dataset_id = ?", (dataset_id,))
+            conn.commit()
+        return jsonify({'status': 'success', 'message': '所有問答配對已刪除。'})
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error for user '{user_id}' in delete_all_qa: {e}")
+        return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
 
 if __name__ == '__main__':
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
