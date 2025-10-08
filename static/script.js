@@ -125,17 +125,43 @@ async function loadTrainingDataForTable(tableName, page = 1) {
         renderQaTable();
         renderPaginationControls(data.pagination);
 
-        const docSection = document.getElementById('documentation-output-section');
-        const docOutput = document.getElementById('documentation-output');
-        if (data.dataset_analysis) {
-            docOutput.textContent = data.dataset_analysis;
-            docSection.style.display = 'block';
-        } else {
-            docSection.style.display = 'none';
+        // Load and display dataset analysis if available
+        if (tableName === 'global' && data.dataset_analysis) {
+            document.getElementById('documentation-output').textContent = data.dataset_analysis;
+            document.getElementById('documentation-output-section').style.display = 'block';
+        } else if (tableName === 'global') {
+            // If no global analysis, hide the section
+            document.getElementById('documentation-output-section').style.display = 'none';
         }
     } catch (error) {
         console.error(`加載訓練數據失敗 (${tableName}):`, error);
         alert(`加載訓練數據失敗: ${error.message}`);
+    }
+}
+
+async function generateDocumentationFromAnalysis() {
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集。');
+        return;
+    }
+
+    const docSection = document.getElementById('documentation-output-section');
+    const docOutput = document.getElementById('documentation-output');
+    
+    docSection.style.display = 'block';
+    docOutput.textContent = '正在加載資料庫結構分析...';
+
+    try {
+        const result = await apiFetch('/api/generate_documentation_from_analysis', { method: 'POST' });
+
+        if (result.status === 'success' && result.documentation) {
+            docOutput.textContent = result.documentation;
+        } else {
+            throw new Error(result.message || '未找到已儲存的分析文件。');
+        }
+    } catch (error) {
+        console.error('加載資料庫分析文件失敗:', error);
+        docOutput.textContent = `加載失敗: ${error.message}`;
     }
 }
 
@@ -723,22 +749,8 @@ async function analyzeSchema() {
     try {
         const result = await apiFetch('/api/analyze_schema', { method: 'POST' });
         
-        if (result.status === 'success' && result.analysis && result.analysis.length > 0) {
-            outputDiv.innerHTML = ''; // Clear loading message
-            result.analysis.forEach(table => {
-                const card = document.createElement('div');
-                card.className = 'section';
-                card.style.marginBottom = '1em';
-
-                let cardHTML = `
-                    <h3>${table.table_name}</h3>
-                    <pre style="white-space: pre-wrap; background-color: #f8f8f8; padding: 1em; border-radius: 4px;">${table.suggested_documentation}</pre>
-                    <button onclick="appendToInput('doc-input', \`${table.suggested_documentation}\`)">添加到知識背景</button>
-                `;
-                
-                card.innerHTML = cardHTML;
-                outputDiv.appendChild(card);
-            });
+        if (result.status === 'success' && result.analysis) {
+            outputDiv.innerHTML = `<pre style="white-space: pre-wrap; background-color: #f8f8f8; padding: 1em; border-radius: 4px;">${result.analysis}</pre>`;
         } else {
             outputDiv.innerHTML = `<p>分析完成，但未找到任何可分析的資料。原因：${result.message || '未知'}</p>`;
         }

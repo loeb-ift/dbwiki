@@ -505,40 +505,110 @@ def generate_documentation():
 @api_login_required
 def analyze_schema():
     user_id = session['username']
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
     try:
         vn = get_vanna_instance(user_id)
         vn = configure_vanna_for_request(vn, user_id)
 
-        df_information_schema = vn.run_sql("""
-            SELECT
-                'main' as table_catalog,
-                'main' as table_schema,
-                m.name as table_name,
-                p.name as column_name,
-                p.type as data_type,
-                '' as comment
-            FROM sqlite_master m
-            JOIN pragma_table_info(m.name) p
-            WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'
-        """)
+        # 1. 獲取 DDL
+        inspector = inspect(vn.engine)
+        table_names = inspector.get_table_names()
+        ddl_statements = []
+        with vn.engine.connect() as connection:
+            for name in table_names:
+                ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
+                if ddl: ddl_statements.append(ddl + ";")
+        full_ddl = "\n".join(ddl_statements)
 
-        if df_information_schema.empty:
-             return jsonify({"status": "success", "analysis": []})
+        # 2. 獲取知識背景文件
+        with get_user_db_connection(user_id) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT documentation_text FROM training_documentation WHERE dataset_id = ? AND table_name != '__dataset_analysis__'", (dataset_id,))
+            documentation_rows = cursor.fetchall()
+            knowledge_docs = "\n".join([row['documentation_text'] for row in documentation_rows])
 
-        training_plan = vn.get_training_plan_generic(df=df_information_schema)
+            # 3. 獲取 SQL 問答配對
+            cursor.execute("SELECT question, sql_query FROM training_qa WHERE dataset_id = ?", (dataset_id,))
+            qa_pairs_rows = cursor.fetchall()
+            qa_pairs_str = "\n".join([f"問: {row['question']}\n答: {row['sql_query']}" for row in qa_pairs_rows])
+
+        # 4. 組裝提示
+        documentation_prompt_content = load_prompt_template('documentation_prompt.txt')
         
-        analysis_results = []
-        for item in training_plan._plan:
-            if item.item_type == 'documentation':
-                analysis_results.append({
-                    "table_name": item.item_name,
-                    "suggested_documentation": item.item_value,
-                })
+        # 根據 prompt 模板的預期格式組裝
+        prompt_content = f"""
+DDL 語句:
+{full_ddl}
 
-        return jsonify({"status": "success", "analysis": analysis_results})
+業務術語:
+{knowledge_docs if knowledge_docs else "無"}
+
+SQL 查詢集合:
+{qa_pairs_str if qa_pairs_str else "無"}
+
+請務必以繁體中文生成所有分析結果和建議。
+"""
+        prompt = documentation_prompt_content + prompt_content
+
+        # 5. 呼叫 LLM
+        analysis_documentation = vn.submit_prompt([{'role': 'user', 'content': prompt}])
+
+        # 6. 儲存分析結果
+        if analysis_documentation:
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                analysis_table_name = '__dataset_analysis__'
+                cursor.execute(
+                    "REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)",
+                    (dataset_id, analysis_table_name, analysis_documentation)
+                )
+                conn.commit()
+
+        # 7. 返回結果
+        app.logger.info(f"Schema analysis for user '{user_id}' completed. Analysis length: {len(analysis_documentation) if analysis_documentation else 0}")
+        return jsonify({
+            'status': 'success',
+            'analysis': analysis_documentation or "無法生成資料庫分析文件。"
+        })
     except Exception as e:
         app.logger.error(f"Schema analysis failed for user '{user_id}': {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/generate_documentation_from_analysis', methods=['POST'])
+@api_login_required
+def generate_documentation_from_analysis():
+    user_id = session['username']
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        app.logger.warning(f"User '{user_id}' attempted to generate documentation from analysis without an active dataset.")
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
+    try:
+        with get_user_db_connection(user_id) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT documentation_text FROM training_documentation WHERE dataset_id = ? AND table_name = '__dataset_analysis__'", (dataset_id,))
+            analysis_row = cursor.fetchone()
+            analysis_documentation = analysis_row['documentation_text'] if analysis_row else ""
+
+        if not analysis_documentation:
+            app.logger.info(f"No analysis documentation found for dataset '{dataset_id}' for user '{user_id}'.")
+            return jsonify({'status': 'error', 'message': 'No analysis documentation found for the active dataset.'}), 400
+
+        app.logger.info(f"Successfully retrieved analysis documentation for dataset '{dataset_id}' for user '{user_id}'. Length: {len(analysis_documentation)}")
+        return jsonify({
+            'status': 'success',
+            'documentation': analysis_documentation
+        })
+    except Exception as e:
+        app.logger.error(f"Error retrieving analysis documentation for user '{user_id}': {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/delete_all_qa', methods=['POST'])
 @api_login_required
