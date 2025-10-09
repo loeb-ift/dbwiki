@@ -1,595 +1,804 @@
 import logging
-from flask import Flask, render_template, request, jsonify, Response, stream_with_context, session
+import threading
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context, session, redirect, url_for
+from werkzeug.utils import secure_filename
 import os
-from dotenv import load_dotenv
-import re
-import json
+import sys
+from functools import wraps
 import sqlite3
 import uuid
-
+import json
+import re
+import time
+import tempfile
+from dotenv import load_dotenv
+import pandas as pd
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import DatabaseError
+from sqlalchemy.exc import DatabaseError, OperationalError
+from queue import Queue
+from threading import Thread
+import traceback
+
+# Helper function to load prompt templates
+def load_prompt_template(filename):
+    # The prompt files are now located directly in the 'prompts' directory.
+    path = os.path.join('prompts', filename)
+
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    else:
+        raise FileNotFoundError(f"Prompt template file not found in 'prompts/': {filename}")
+
+# Add 'src' to Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+
 from vanna.ollama import Ollama
 from vanna.chromadb import ChromaDB_VectorStore
 from vanna.types import TrainingPlan
-import pandas as pd
 
-from werkzeug.middleware.proxy_fix import ProxyFix
-import requests
-
-# 加載環境變量
+# --- App Setup ---
 load_dotenv()
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', str(uuid.uuid4()))
 
-def init_training_db():
-    """Initializes the training database and creates tables if they don't exist."""
-    db_path = os.getenv('TRAINING_DATA_DB_PATH', 'training_data.sqlite') # Provide a default path
+# --- User Management ---
+users = {"user1": "pass1", "user2": "pass2"}
+
+# Helper function to write logs to file
+def write_ask_log(user_id: str, log_type: str, content: str):
+    log_dir = os.path.join(os.getcwd(), 'ask_log')
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = int(time.time())
+    file_path = os.path.join(log_dir, f"{user_id}_{log_type}_{timestamp}.log")
+    with open(file_path, 'a', encoding='utf-8') as f:
+        f.write(f"{content}\n")
+    app.logger.info(f"Ask log written to: {file_path}")
+
+def _get_all_ask_logs(user_id: str) -> dict:
+    log_dir = os.path.join(os.getcwd(), 'ask_log')
+    if not os.path.exists(log_dir):
+        return {}
+
+    all_logs = {}
+    for filename in os.listdir(log_dir):
+        if filename.startswith(f"{user_id}_") and filename.endswith(".log"):
+            log_type_parts = filename.split('_')
+            # Reconstruct log type, excluding user_id and timestamp
+            # e.g., user1_get_similar_question_sql_results_1759994574.log -> get_similar_question_sql_results
+            # Ensure to handle cases where log_type might contain multiple underscores
+            log_type = "_".join(log_type_parts[1:-1])
+            
+            file_path = os.path.join(log_dir, filename)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    all_logs.setdefault(log_type, []).append(content)
+            except Exception as e:
+                app.logger.error(f"Error reading log file {filename}: {e}")
     
-    # Ensure db_path is an absolute path
-    db_path = os.path.abspath(db_path)
+    # Join all contents for each log type
+    return {log_type: "\n".join(contents) for log_type, contents in all_logs.items()}
 
-    if not db_path: # Check again after abspath, though unlikely to be empty
-        print("WARNING: TRAINING_DATA_DB_PATH is empty after path resolution. Skipping training DB initialization.")
+def _delete_all_ask_logs(user_id: str):
+    log_dir = os.path.join(os.getcwd(), 'ask_log')
+    if not os.path.exists(log_dir):
         return
 
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+    for filename in os.listdir(log_dir):
+        if filename.startswith(f"{user_id}_") and filename.endswith(".log"):
+            file_path = os.path.join(log_dir, filename)
+            try:
+                os.remove(file_path)
+                app.logger.info(f"Removed log file: {filename}")
+            except Exception as e:
+                app.logger.error(f"Error removing log file {filename}: {e}")
 
-        # Create training_ddl table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS training_ddl (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ddl_statement TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-        # Create training_documentation table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS training_documentation (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                documentation_text TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-        # Create training_qa table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS training_qa (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                question TEXT NOT NULL,
-                sql_query TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        
-        # Create datasets table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS datasets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                dataset_name TEXT NOT NULL,
-                db_path TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-        conn.commit()
-        
-        # Verify if training_qa table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='training_qa';")
-        if cursor.fetchone() is None:
-            conn.close()
-            print(f"ERROR: 'training_qa' table was not created in database at '{db_path}'.") # Add print for visibility
-            raise Exception(f"ERROR: 'training_qa' table was not created in database at '{db_path}'.")
-
-        conn.close()
-        print(f"INFO: Training database at '{db_path}' initialized successfully.")
-    except sqlite3.Error as e:
-        print(f"ERROR: Could not initialize training database at '{db_path}': {e}")
-        raise # Re-raise the exception to propagate it
-    except Exception as e: # Catch any other exceptions during initialization
-        print(f"ERROR: An unexpected error occurred during training database initialization at '{db_path}': {e}")
-        raise
-
-
-# 初始化 Flask 應用
-app = Flask(__name__)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1, x_prefix=1)
-
-# 初始化訓練數據庫
-init_training_db()
-
-# --- Helper Functions for Dataset Management ---
-
-def get_dataset_db_path(dataset_id: str) -> str:
-    db_dir = os.path.join(os.getcwd(), 'user_data', 'datasets')
+# --- Helper Functions ---
+def get_user_db_path(user_id: str) -> str:
+    db_dir = os.path.join(os.getcwd(), 'user_data')
     os.makedirs(db_dir, exist_ok=True)
-    return os.path.join(db_dir, f'dataset_{dataset_id}.sqlite')
+    return os.path.join(db_dir, f'training_data_{user_id}.sqlite')
 
-# --- Initialize Vanna Instance with Dataset Support ---
-active_dataset_id = None
-active_dataset_engine = None
+def get_user_db_connection(user_id: str) -> sqlite3.Connection:
+    db_path = get_user_db_path(user_id)
+    return sqlite3.connect(db_path)
 
-# --- Simple authentication decorator for API endpoints (single user mode) ---
+# --- Decorators ---
 def api_login_required(f):
-    from functools import wraps
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # In single user mode, we assume user is always authenticated
+        if 'username' not in session:
+            return jsonify({'status': 'error', 'message': 'User not authenticated.'}), 401
         return f(*args, **kwargs)
     return decorated_function
 
-# 創建 Vanna 實例
-class MyVanna(Ollama, ChromaDB_VectorStore):
-    def __init__(self, config=None, collection_name='my_collection', persist_directory='./chroma_data'):
-        model = os.getenv('OLLAMA_MODEL')
-        if model is None:
-            raise ValueError("OLLAMA_MODEL environment variable not set. Please set it in your .env file.")
-
-        ollama_config = {
-            'model': model,
-            'ollama_host': os.getenv('OLLAMA_HOST'),
-        }
-        Ollama.__init__(self, config=ollama_config)
-        # 设置 ChromaDB 的持久化目录
-        chroma_config = {
-            'collection_name': collection_name,
-            'persist_directory': persist_directory # 将数据持久化到项目根目录下的 chroma_data 文件夹
-        }
-        ChromaDB_VectorStore.__init__(self, config=chroma_config)
-
-# --- 猴子補丁：阻止 Vanna 自動拉取模型 ---
-# 當前的 Vanna 庫版本似乎忽略了 'pull_model' 配置。
-# 此補丁將覆蓋負責拉取模型的私有方法，使其不執行任何操作。
-def _noop_pull_model(self, client, model_name):
-    """一個空操作函數，用於替換模型拉取邏輯。"""
-    print(f"INFO: 補丁已激活。跳過對 '{model_name}' 的 Ollama 模型拉取。")
-    pass
-
-Ollama._Ollama__pull_model_if_ne = _noop_pull_model
-# ----------------------------------------------------
-
-print(f"DEBUG: OLLAMA_MODEL before MyVanna init: {os.getenv('OLLAMA_MODEL')}")
-
-# 全局字典，用于存储不同数据集的 Vanna 实例
-vanna_instances = {}
-# 当前活跃的 Vanna 实例的键
-current_vanna_instance_key = None
-
-def get_vanna_instance(collection_name='my_collection', persist_directory='./chroma_data'):
-    global current_vanna_instance_key
-    key = f"{collection_name}-{persist_directory}"
-    if key not in vanna_instances:
-        print(f"INFO: Creating new Vanna instance for collection '{collection_name}' in '{persist_directory}'")
-        vanna_instances[key] = MyVanna(collection_name=collection_name, persist_directory=persist_directory)
-    current_vanna_instance_key = key
-    return vanna_instances[key]
-
-# 初始 Vanna 实例
-vn = get_vanna_instance()
-
-def load_training_data_from_db(vanna_instance):
-    """Loads all training data from the SQLite database and trains the Vanna model."""
-    db_path = os.getenv('TRAINING_DATA_DB_PATH')
-    if not db_path or not os.path.exists(db_path):
-        print(f"INFO: Training data database not found at '{db_path}'. Skipping initial training.")
-        return
-
-    print(f"INFO: Loading training data from '{db_path}'...")
+# --- Database Initialization ---
+def init_training_db(user_id: str):
     try:
-        conn = sqlite3.connect(db_path)
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            tables = {
+                "training_ddl": "(id INTEGER PRIMARY KEY AUTOINCREMENT, ddl_statement TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+                "training_documentation": "(id INTEGER PRIMARY KEY AUTOINCREMENT, documentation_text TEXT NOT NULL, table_name TEXT, dataset_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(dataset_id, table_name))",
+                "training_qa": "(id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT NOT NULL, sql_query TEXT NOT NULL, table_name TEXT, dataset_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+                "datasets": "(id INTEGER PRIMARY KEY AUTOINCREMENT, dataset_name TEXT NOT NULL, db_path TEXT NOT NULL UNIQUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+                "correction_rules": "(id INTEGER PRIMARY KEY AUTOINCREMENT, incorrect_name TEXT NOT NULL UNIQUE, correct_name TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            }
+            for table_name, schema in tables.items():
+                cursor.execute(f"CREATE TABLE IF NOT EXISTS {table_name} {schema};")
+            
+            def add_column_if_not_exists(table, column, col_type):
+                cursor.execute(f"PRAGMA table_info({table})")
+                if column not in [info[1] for info in cursor.fetchall()]:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+            
+            add_column_if_not_exists('training_documentation', 'dataset_id', 'TEXT')
+            add_column_if_not_exists('training_qa', 'dataset_id', 'TEXT')
+            
+            conn.commit()
+    except sqlite3.Error as e:
+        app.logger.error(f"Could not initialize/update training database for user '{user_id}': {e}")
+        raise
+
+# --- Vanna AI Integration ---
+class MyVanna(Ollama, ChromaDB_VectorStore):
+    def __init__(self, user_id: str, config=None):
+        app.logger.info(f"Initializing MyVanna instance for user: {user_id}")
+        self.log_queue = Queue()
+        self.user_id = user_id  # Store user_id as an instance attribute
+        model = os.getenv('OLLAMA_MODEL')
+        if not model: raise ValueError("OLLAMA_MODEL not set.")
+        ollama_host = os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434')
+        
+        app.logger.info(f"Initializing Ollama for user: {user_id} with model: {model}, host: {ollama_host}")
+        Ollama.__init__(self, config={'model': model, 'ollama_host': ollama_host})
+        
+        collection_name = f"vanna_training_data_{user_id}"
+        app.logger.info(f"Initializing ChromaDB_VectorStore for user: {user_id} with collection: {collection_name}")
+        ChromaDB_VectorStore.__init__(self, config={'collection_name': collection_name})
+        
+        # Store original methods to call them and log their results
+        # Use super() to get the methods from the base classes (Ollama or ChromaDB_VectorStore)
+        self._original_get_similar_question_sql = super().get_similar_question_sql
+        self._original_get_related_ddl = super().get_related_ddl
+        self._original_get_related_documentation = super().get_related_documentation
+        self._original_generate_sql = super().generate_sql
+
+    def get_similar_question_sql(self, question: str, **kwargs):
+        top_n = kwargs.pop('top_n', 5)
+        log_message_calling = f"Calling get_similar_question_sql with question: '{question}', top_n: {top_n}"
+        app.logger.info(log_message_calling)
+        write_ask_log(self.user_id, "get_similar_question_sql_calling", log_message_calling)
+        self.log_queue.put({'type': 'thinking_step', 'step': '開始相似問題檢索', 'details': {'question': question, 'top_n': top_n}})
+        results = self._original_get_similar_question_sql(question, top_n=top_n, **kwargs)
+        log_message_results = f"get_similar_question_sql raw results: {results}"
+        app.logger.info(log_message_results)
+        write_ask_log(self.user_id, "get_similar_question_sql_results", log_message_results)
+        self.log_queue.put({'type': 'thinking_step', 'step': '相似問題檢索完成', 'details': results})
+        return results
+
+    def get_related_ddl(self, question: str, **kwargs):
+        top_n = kwargs.pop('top_n', 5)
+        log_message_calling = f"Calling get_related_ddl with question: '{question}', top_n: {top_n}"
+        app.logger.info(log_message_calling)
+        write_ask_log(self.user_id, "get_related_ddl_calling", log_message_calling)
+        self.log_queue.put({'type': 'thinking_step', 'step': '開始 DDL 檢索', 'details': {'question': question, 'top_n': top_n}})
+        results = self._original_get_related_ddl(question, top_n=top_n, **kwargs)
+        log_message_results = f"get_related_ddl raw results: {results}"
+        app.logger.info(log_message_results)
+        write_ask_log(self.user_id, "get_related_ddl_results", log_message_results)
+        self.log_queue.put({'type': 'thinking_step', 'step': 'DDL 檢索完成', 'details': results})
+        return results
+
+    def get_related_documentation(self, question: str, **kwargs):
+        top_n = kwargs.pop('top_n', 5)
+        log_message_calling = f"Calling get_related_documentation with question: '{question}', top_n: {top_n}"
+        app.logger.info(log_message_calling)
+        write_ask_log(self.user_id, "get_related_documentation_calling", log_message_calling)
+        self.log_queue.put({'type': 'thinking_step', 'step': '開始文件檢索', 'details': {'question': question, 'top_n': top_n}})
+        results = self._original_get_related_documentation(question, top_n=top_n, **kwargs)
+        log_message_results = f"get_related_documentation raw results: {results}"
+        app.logger.info(log_message_results)
+        write_ask_log(self.user_id, "get_related_documentation_results", log_message_results)
+        self.log_queue.put({'type': 'thinking_step', 'step': '文件檢索完成', 'details': results})
+        return results
+
+    def generate_sql(self, question: str, **kwargs):
+        self.log_queue.put({'type': 'thinking_step', 'step': 'LLM 開始生成 SQL', 'details': {'question': question}})
+        sql_response = self._original_generate_sql(question, **kwargs)
+        self.log_queue.put({'type': 'thinking_step', 'step': 'LLM 完成生成 SQL', 'details': {'sql_response': sql_response}})
+        return sql_response
+
+    def log(self, message: str, title: str = "資訊"):
+        self.log_queue.put({'type': 'thinking_step', 'step': title, 'details': {'message': message}})
+
+_vanna_instances = {}
+def get_vanna_instance(user_id: str) -> MyVanna:
+    if user_id not in _vanna_instances:
+        app.logger.info(f"Creating new MyVanna instance for user: {user_id}")
+        _vanna_instances[user_id] = MyVanna(user_id=user_id)
+    else:
+        app.logger.info(f"Reusing existing MyVanna instance for user: {user_id}")
+    return _vanna_instances[user_id]
+
+def _noop_pull_model(self, client, model_name):
+    app.logger.info(f"Patch: Skipping Ollama model pull for '{model_name}'")
+Ollama._Ollama__pull_model_if_ne = _noop_pull_model
+
+def configure_vanna_for_request(vn, user_id, dataset_id): # Add dataset_id as a parameter
+    if not dataset_id:
+        raise Exception("No active dataset selected.")
+    
+    with get_user_db_connection(user_id) as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT db_path FROM datasets WHERE id = ?", (dataset_id,))
+        row = cursor.fetchone()
+    if not row:
+        raise Exception("Active dataset not found.")
+    
+    engine = create_engine(f"sqlite:///{row[0]}")
+    vn.engine = engine
+    vn.run_sql = lambda sql: pd.read_sql_query(sql, engine)
+    vn.run_sql_is_set = True
+    return vn
 
-        # 1. Load DDL
-        cursor.execute("SELECT ddl_statement FROM training_ddl")
-        ddl_rows = cursor.fetchall()
-        ddls = list(set([row[0] for row in ddl_rows]))
-
-        # 2. Load Documentation
-        cursor.execute("SELECT documentation_text FROM training_documentation")
-        doc_rows = cursor.fetchall()
-        docs = list(set([row[0] for row in doc_rows]))
-
-        # 3. Load QA pairs
-        cursor.execute("SELECT question, sql_query FROM training_qa")
-        qa_rows = cursor.fetchall()
-        qa_pairs = [{'question': row[0], 'sql': row[1]} for row in qa_rows]
-
-        conn.close()
-
-        # 4. Train the model with loaded data
-        if ddls or docs or qa_pairs:
-            print("INFO: Training Vanna model with loaded data...")
-
-            # 獲取現有的訓練資料，以便檢查重複
-            existing_training_data = vanna_instance.get_training_data()
-            print(f"DEBUG: Existing training data types: {existing_training_data['training_data_type'].unique()}")
-            existing_ddls = set(existing_training_data[existing_training_data['training_data_type'].str.lower() == 'ddl']['content'].tolist())
-            existing_docs = set(existing_training_data[existing_training_data['training_data_type'].str.lower() == 'documentation']['content'].tolist())
-
-            # 先處理 DDL 語句
-            for ddl in ddls:
-                if ddl not in existing_ddls:
-                    vanna_instance.train(ddl=ddl)
-                else:
-                    print(f"INFO: Skipping DDL training for already existing DDL: {ddl[:50]}...")
-
-            # 處理文檔
-            for doc in docs:
-                if doc not in existing_docs:
-                    vanna_instance.train(documentation=doc)
-                else:
-                    print(f"INFO: Skipping documentation training for already existing documentation: {doc[:50]}...")
-
-            # 處理 QA 配對 (這裡假設 QA 配對不會重複，或者重複訓練是可接受的)
-            for pair in qa_pairs:
-                vanna_instance.train(question=pair['question'], sql=pair['sql'])
-
-        print("INFO: Training data loaded and Vanna model trained.")
-
-    except Exception as e:
-        print(f"ERROR: Failed to load training data from DB: {e}")
-
-# Load existing training data on startup
-load_training_data_from_db(vn)
-
+# --- Flask Routes ---
 @app.route('/')
 def index():
-    """
-    渲染主頁面。
-    """
-    return render_template('index.html')
+    if 'username' not in session: return redirect(url_for('login'))
+    return render_template('index.html', username=session['username'])
 
-# --- API Endpoints ---
-@app.route('/api/get_db_config', methods=['GET'])
-def get_db_config():
-    """
-    API 端點：讀取 .env 文件並返回數據庫配置。
-    """
-    try:
-        # 重新加載 .env 文件以確保獲取最新值
-        load_dotenv(override=True)
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form.get('password')
+        if users.get(username) == password:
+            session['username'] = username
+            init_training_db(username)
+            return redirect(url_for('index'))
+        return render_template('login.html', error='Invalid credentials')
+    return render_template('login.html')
 
-        configs = {
-            "postgresql": {"enabled": False},
-            "mysql": {"enabled": False},
-            "mssql": {"enabled": False},
-            "sqlite": {"enabled": False},
-            "csv": {"enabled": False}
-        }
-        
-        active_type = os.getenv('DB_TYPE')
-        if active_type:
-            active_type = active_type.lower()
+@app.route('/logout')
+def logout():
+    session.pop('username', None)
+    session.pop('active_dataset_id', None)
+    return redirect(url_for('login'))
 
-        # 遍歷所有可能的數據庫類型，從環境變量中提取配置
-        for db_type_key in configs.keys():
-            prefix = f"DB_{db_type_key.upper()}_"
-            current_config = {}
-            
-            # 檢查特定於類型的變量
-            for key_suffix in ["HOST", "PORT", "USER", "PASSWORD", "NAME", "FILE"]:
-                env_var_name = f"{prefix}{key_suffix}"
-                value = os.getenv(env_var_name)
-                if value is not None:
-                    current_config[key_suffix.lower()] = value
-            
-            # 檢查通用變量，如果特定類型沒有設置
-            if not current_config.get("host"):
-                current_config["host"] = os.getenv("DB_HOST")
-            if not current_config.get("port"):
-                current_config["port"] = os.getenv("DB_PORT")
-            if not current_config.get("user"):
-                current_config["user"] = os.getenv("DB_USER")
-            if not current_config.get("password"):
-                current_config["password"] = os.getenv("DB_PASSWORD")
-            if not current_config.get("name"):
-                current_config["name"] = os.getenv("DB_NAME")
-            if not current_config.get("file"):
-                current_config["file"] = os.getenv("DB_FILE")
-
-            # 根據配置的存在性設置 enabled 狀態
-            if db_type_key in ['sqlite', 'csv']:
-                configs[db_type_key]["enabled"] = bool(current_config.get("file") or current_config.get("name"))
-            else:
-                configs[db_type_key]["enabled"] = bool(current_config.get("host") and current_config.get("name"))
-
-            # 為了與前端兼容，重命名一些鍵
-            if "user" in current_config:
-                current_config["username"] = current_config.pop("user")
-            if "name" in current_config:
-                current_config["database"] = current_config.pop("name")
-            if "file" in current_config:
-                current_config["database_file"] = current_config.pop("file")
-
-            configs[db_type_key].update(current_config)
-
-        return jsonify({
-            "active_type": active_type,
-            "configs": configs
-        })
-
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-def get_connection_uri(config):
-    """根據配置生成 SQLAlchemy 連接 URI。"""
-    db_type = config.get('type')
-    user = config.get('username')
-    password = config.get('password')
-    host = config.get('host')
-    port = config.get('port')
-    dbname = config.get('database') # For SQLite, this will be the file path
-
-    if db_type == 'postgresql':
-        return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}"
-    elif db_type == 'mysql':
-        return f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{dbname}"
-    elif db_type == 'mssql':
-        # 注意：MSSQL 可能需要 ODBC 驅動
-        driver = 'ODBC Driver 17 for SQL Server'
-        return f"mssql+pyodbc://{user}:{password}@{host}:{port}/{dbname}?driver={driver}"
-    elif db_type == 'sqlite':
-        return f"sqlite:///{dbname}" # dbname is the path to the .db file
-    else:
-        return None
-
-import tempfile
-from werkzeug.utils import secure_filename
-
-@app.route('/api/connect', methods=['POST'])
-def connect_database():
-    global vn
-    """
-    API 端點：連接到用戶指定的數據庫並提取 DDL。
-    現在支持標準 SQL 數據庫、SQLite 和上傳的 CSV 文件。
-    """
-    # 檢查請求是 JSON 還是 FormData
-    if request.is_json:
-        config = request.json
-        db_type = config.get('type')
-        dataset_name = config.get('dataset_name', 'default_dataset') # 从请求中获取数据集名称
-    else:
-        config = request.form.to_dict()
-        db_type = config.get('type')
-        dataset_name = config.get('dataset_name', 'default_dataset') # 从请求中获取数据集名称
-
-    # 根据数据集名称动态设置 ChromaDB 的 collection_name 和 persist_directory
-    collection_name = f"vanna_collection_{dataset_name}"
-    persist_directory = f"./chroma_data_{dataset_name}"
-
-    # 获取或创建 Vanna 实例
-    current_vn = get_vanna_instance(collection_name=collection_name, persist_directory=persist_directory)
+@app.route('/api/datasets', methods=['GET', 'POST'])
+@api_login_required
+def handle_datasets():
+    user_id = session['username']
+    if request.method == 'GET':
+        with get_user_db_connection(user_id) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, dataset_name, created_at FROM datasets ORDER BY created_at DESC")
+            return jsonify({'status': 'success', 'datasets': [dict(row) for row in cursor.fetchall()]})
     
-    # 處理文件上傳 (CSV 或 SQLite)
-    if 'database_file' in request.files:
-        file = request.files['database_file']
-        if file.filename == '':
-            return jsonify({'status': 'error', 'message': 'No selected file'}), 400
+    if request.method == 'POST':
+        dataset_name = request.form.get('dataset_name')
+        files = request.files.getlist('files')
+        if not dataset_name or not files:
+            return jsonify({'status': 'error', 'message': 'Dataset name and files are required.'}), 400
         
-        filename = secure_filename(file.filename)
-        # 將文件保存到臨時目錄
-        temp_dir = tempfile.gettempdir()
-        file_path = os.path.join(temp_dir, filename)
-        file.save(file_path)
-        
-        config['database'] = file_path # 將路徾以用於後續處理
-
-    # 處理 CSV 文件
-    if db_type == 'csv':
-        csv_path = config.get('database')
-        if not csv_path or not os.path.exists(csv_path):
-            return jsonify({'status': 'error', 'message': f"CSV file not found at path: {csv_path}"}), 400
-        
+        db_path = os.path.join('user_data', 'datasets', f'{uuid.uuid4().hex}.sqlite')
         try:
-            # 1. 讀取 CSV 到 DataFrame
-            df = pd.read_csv(csv_path)
-            file_root, _ = os.path.splitext(os.path.basename(csv_path))
-            table_name = file_root.replace('-', '_').replace(' ', '_')
-
-            # 2. 創建一個臨時的 SQLite 資料庫文件
-            temp_db_file = tempfile.NamedTemporaryFile(delete=False, suffix='.sqlite')
-            temp_db_path = temp_db_file.name
-            temp_db_file.close()
+            engine = create_engine(f'sqlite:///{db_path}')
+            for file in files:
+                df = pd.read_csv(file.stream)
+                table_name = os.path.splitext(secure_filename(file.filename))[0].replace('-', '_').replace(' ', '_')
+                df.to_sql(table_name, engine, index=False, if_exists='replace')
             
-            # 將臨時文件路徾儲存起來，以防止它被垃圾回收
-            app.config['TEMP_DB_PATH'] = temp_db_path
-            
-            # 3. 將 DataFrame 寫入到這個臨時的 SQLite 文件中
-            engine = create_engine(f'sqlite:///{temp_db_path}')
-            df.to_sql(table_name, engine, index=False, if_exists='replace')
-
-            # 4. 直接將創建的引擎賦值給 Vanna 實例
-            current_vn.engine = engine
-            
-            # 5. 設定 run_sql 函數以使用臨時 SQLite 資料庫
-            def run_sql_sqlite(sql: str) -> pd.DataFrame:
-                print(f"Executing SQL: {sql}")
-                with current_vn.engine.connect() as connection:
-                    result = connection.execute(text(sql))
-                    rows = result.fetchall()
-                    columns = result.keys()
-                    return pd.DataFrame(rows, columns=columns)
-            current_vn.run_sql = run_sql_sqlite
-            current_vn.run_sql_is_set = True
-            
-            # 6. 從 DataFrame 生成 DDL
-            from pandas.io import sql as pd_sql
-            ddl = pd_sql.get_schema(df, table_name)
-            
-            # 更新全局 Vanna 实例
-            vn = current_vn
-
-            return jsonify({
-                'status': 'success',
-                'message': f"CSV data loaded into in-memory database. Table '{table_name}' created. DDL generated.",
-                'ddl': ddl
-            })
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO datasets (dataset_name, db_path) VALUES (?, ?)", (dataset_name, db_path))
+                new_id = cursor.lastrowid
+                conn.commit()
+            return jsonify({'status': 'success', 'dataset': {'id': new_id, 'dataset_name': dataset_name}}), 201
         except Exception as e:
-            app.logger.error(f"Error processing CSV file: {e}", exc_info=True)
-            return jsonify({'status': 'error', 'message': f"Error processing CSV file: {str(e)}"}), 500
- 
-    # 處理基於 SQLAlchemy 的數據庫 (PostgreSQL, MySQL, MSSQL, SQLite)
-    try:
-        if db_type == 'postgresql':
-            current_vn.connect_to_postgresql(host=config.get('host'), dbname=config.get('database'), user=config.get('username'), password=config.get('password'), port=config.get('port'))
-            current_vn.run_sql_is_set = True
-        elif db_type == 'mysql':
-            current_vn.connect_to_mysql(host=config.get('host'), db=config.get('database'), user=config.get('username'), password=config.get('password'), port=config.get('port'))
-            current_vn.run_sql_is_set = True
-        elif db_type == 'mssql':
-            # 构建 ODBC 连接字符串
-            odbc_conn_str = (
-                f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-                f"SERVER={config.get('host')},{config.get('port')};"
-                f"DATABASE={config.get('database')};"
-                f"UID={config.get('username')};"
-                f"PWD={config.get('password')}"
-            )
-            current_vn.connect_to_mssql(odbc_conn_str=odbc_conn_str)
-            current_vn.run_sql_is_set = True
-        elif db_type == 'sqlite':
-            current_vn.connect_to_sqlite(config.get('database'))
-            current_vn.run_sql_is_set = True
-        else:
-            return jsonify({'status': 'error', 'message': f"Unsupported database type: {db_type}"}), 400
- 
-        # 更新全局 Vanna 实例
-        vn = current_vn
+            if os.path.exists(db_path): os.remove(db_path)
+            return jsonify({'status': 'error', 'message': str(e)}), 500
 
-        ddl_statements = current_vn.get_ddl()
- 
-        return jsonify({
-            'status': 'success',
-            'message': 'Connection successful. DDL extracted.',
-            'ddl': ddl_statements
-        })
-    except DatabaseError as e:
-        if db_type == 'sqlite' and 'file is not a database' in str(e):
-            return jsonify({'status': 'error', 'message': 'The uploaded file is not a valid SQLite database. Please check the file or select the correct database type (e.g., CSV).'}), 400
-        return jsonify({'status': 'error', 'message': f"A database error occurred: {str(e)}", 'error_type': type(e).__name__}), 500
-    except Exception as e:
-        app.logger.error(f"An unexpected error occurred in connect_database: {e}", exc_info=True)
-        return jsonify({'status': 'error', 'message': f"An unexpected error occurred: {str(e)}", 'error_type': type(e).__name__}), 500
-
-@app.route('/api/get_csv_table_info', methods=['GET'])
-def get_csv_table_info():
-    """
-    API 端點：獲取當前連接的 SQLite 資料庫（來自 CSV 轉換）中的表名和行數。
-    """
-    global current_vanna_instance_key, vanna_instances
-    if current_vanna_instance_key is None or current_vanna_instance_key not in vanna_instances:
-        return jsonify({'status': 'error', 'message': '沒有活躍的 Vanna 實例。'}), 400
+@app.route('/api/datasets/activate', methods=['POST'])
+@api_login_required
+def activate_dataset():
+    user_id = session['username']
+    dataset_id = request.get_json().get('dataset_id')
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'dataset_id is required.'}), 400
     
-    current_vn = vanna_instances[current_vanna_instance_key]
-
-    if not hasattr(current_vn, 'engine') or current_vn.engine.name != 'sqlite':
-        return jsonify({'status': 'error', 'message': '未連接到 SQLite 資料庫或未從 CSV 轉換。'}), 400
-
     try:
-        inspector = inspect(current_vn.engine)
+        session['active_dataset_id'] = dataset_id
+        vn = get_vanna_instance(user_id)
+        vn = configure_vanna_for_request(vn, user_id, dataset_id) # Pass dataset_id
+        
+        inspector = inspect(vn.engine)
         table_names = inspector.get_table_names()
-        
-        if not table_names:
-            return jsonify({'status': 'error', 'message': 'SQLite 資料庫中沒有找到表。'}), 404
-
-        # 假設只有一個表，或者我們只關心第一個表
-        if not table_names:
-            return jsonify({'status': 'error', 'message': 'SQLite 資料庫中沒有找到表。'}), 404
-        table_name = table_names[0]
-        
+        ddl_statements = []
         with vn.engine.connect() as connection:
-            result = connection.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
-            total_rows = result.scalar()
+            for name in table_names:
+                ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
+                if ddl: ddl_statements.append(ddl + ";")
+
+        training_data = vn.get_training_data()
+        is_trained = not training_data.empty if training_data is not None else False
 
         return jsonify({
-            'status': 'success',
-            'table_name': table_name,
-            'total_rows': total_rows
+            'status': 'success', 
+            'message': f"Dataset activated.", 
+            'table_names': table_names, 
+            'ddl': ddl_statements,
+            'is_trained': is_trained
         })
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': f"獲取表信息失敗: {str(e)}"}), 500
-
-@app.route('/api/get_table_data', methods=['GET'])
-def get_table_data():
-    """
-    API 端點：獲取指定 SQLite 表的帶分頁數據。
-    """
-    table_name = request.args.get('table_name')
-    page = int(request.args.get('page', 1))
-    page_size = int(request.args.get('page_size', 10))
-
-    if not table_name:
-        return jsonify({'status': 'error', 'message': '缺少表名。'}), 400
-
-    global current_vanna_instance_key, vanna_instances
-    if current_vanna_instance_key is None or current_vanna_instance_key not in vanna_instances:
-        return jsonify({'status': 'error', 'message': '沒有活躍的 Vanna 實例。'}), 400
-    
-    current_vn = vanna_instances[current_vanna_instance_key]
-
-    if not hasattr(current_vn, 'engine') or current_vn.engine.name != 'sqlite':
-        return jsonify({'status': 'error', 'message': '未連接到 SQLite 資料庫。'}), 400
-
-    try:
-        offset = (page - 1) * page_size
-        with current_vn.engine.connect() as connection:
-            # 獲取列名
-            columns_result = connection.execute(text(f"PRAGMA table_info({table_name})"))
-            column_names = [row[1] for row in columns_result.fetchall()] # 提取列名
-
-            # 獲取分頁數據
-            data_result = connection.execute(text(f"SELECT * FROM {table_name} LIMIT {page_size} OFFSET {offset}"))
-            rows = data_result.fetchall()
-            
-            # 將行轉換為字典列表
-            data = [dict(zip(column_names, row)) for row in rows]
-
-        return jsonify({
-            'status': 'success',
-            'data': data,
-            'page': page,
-            'page_size': page_size
-        })
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': f"獲取表數據失敗: {str(e)}"}), 500
-
-
-@app.route('/api/analyze_ddl', methods=['POST'])
-def analyze_ddl():
-    """
-    API 端點：使用 LLM 分析 DDL 並生成業務文檔。
-    """
-    data = request.json
-    ddl = data.get('ddl')
-
-    if not ddl:
-        return jsonify({'status': 'error', 'message': 'DDL is required.'}), 400
-
-    try:
-        # 建立一個提示，要求 LLM 為 DDL 生成文件
-        prompt = f"Please generate business-friendly documentation for the following DDL statements:\n\n{ddl}"
-
-        # 直接使用繼承自 Ollama 的 submit_prompt 方法與 LLM 互動
-        # 我們假設 submit_prompt 返回的是一個字串
-        documentation = vn.submit_prompt([{'role': 'user', 'content': prompt}])
-        
-        return jsonify({'status': 'success', 'documentation': documentation})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/api/training_data', methods=['GET'])
+@api_login_required
+def get_training_data():
+    user_id = session['username']
+    table_name = request.args.get('table_name', 'global')
+    page = int(request.args.get('page', 1))
+    page_size = 10  # Fixed page size
+    offset = (page - 1) * page_size
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
+    with get_user_db_connection(user_id) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Get documentation
+        cursor.execute("SELECT documentation_text FROM training_documentation WHERE table_name = ? AND dataset_id = ?", (table_name, dataset_id))
+        doc_row = cursor.fetchone()
+        documentation = doc_row['documentation_text'] if doc_row else ""
+        
+        # Get total count for pagination
+        cursor.execute("SELECT COUNT(*) FROM training_qa WHERE table_name = ? AND dataset_id = ?", (table_name, dataset_id))
+        total_count = cursor.fetchone()[0]
+        total_pages = (total_count + page_size - 1) // page_size
+
+        # Get paginated QA pairs
+        cursor.execute("""
+            SELECT id, question, sql_query as sql
+            FROM training_qa
+            WHERE table_name = ? AND dataset_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (table_name, dataset_id, page_size, offset))
+        qa_pairs = [dict(row) for row in cursor.fetchall()]
+        
+        # Get dataset analysis
+        cursor.execute("SELECT documentation_text FROM training_documentation WHERE table_name = ? AND dataset_id = ?", ('__dataset_analysis__', dataset_id))
+        analysis_row = cursor.fetchone()
+        dataset_analysis = analysis_row['documentation_text'] if analysis_row else ""
+
+    response_data = {
+        'documentation': documentation,
+        'qa_pairs': qa_pairs,
+        'dataset_analysis': dataset_analysis,
+        'pagination': {
+            'current_page': page,
+            'total_pages': total_pages,
+            'total_count': total_count
+        }
+    }
+
+    # Save to temporary file and print info
+    try:
+        temp_dir = os.path.join(os.getcwd(), 'temp_vanna_data')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_file_path = os.path.join(temp_dir, f"training_data_{user_id}_{dataset_id}_{int(time.time())}.json")
+        with open(temp_file_path, 'w', encoding='utf-8') as f:
+            json.dump(response_data, f, ensure_ascii=False, indent=2)
+        app.logger.info(f"Training data saved to temporary file: {temp_file_path}")
+        app.logger.info(f"Temporary file content:\n{json.dumps(response_data, ensure_ascii=False, indent=2)}")
+    except Exception as e:
+        app.logger.error(f"Error saving training data to temporary file: {e}")
+
+    return jsonify(response_data)
+
+@app.route('/api/save_documentation', methods=['POST'])
+@api_login_required
+def save_documentation():
+    user_id = session['username']
+    data = request.get_json()
+    doc_content = data.get('documentation', '')
+    table_name = data.get('table_name', 'global')
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
+    try:
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            if doc_content.strip():
+                cursor.execute(
+                    "REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)",
+                    (dataset_id, table_name, doc_content)
+                )
+                message = f"Documentation for table '{table_name}' saved."
+            else:
+                cursor.execute("DELETE FROM training_documentation WHERE dataset_id = ? AND table_name = ?", (dataset_id, table_name))
+                message = f"Documentation for table '{table_name}' cleared."
+            conn.commit()
+        return jsonify({'status': 'success', 'message': message})
+    except sqlite3.Error as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/add_qa_question', methods=['POST'])
+@api_login_required
+def add_qa_question():
+    user_id = session['username']
+    data = request.get_json()
+    question = data.get('question')
+    sql_query = data.get('sql')
+    table_name = data.get('table_name', 'global')
+    dataset_id = session.get('active_dataset_id')
+
+    if not all([question, sql_query, dataset_id]):
+        return jsonify({'status': 'error', 'message': 'Question, SQL, and active dataset are required.'}), 400
+
+    try:
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO training_qa (question, sql_query, table_name, dataset_id) VALUES (?, ?, ?, ?)",
+                (question, sql_query, table_name, dataset_id)
+            )
+            new_id = cursor.lastrowid
+            conn.commit()
+        return jsonify({'status': 'success', 'message': 'QA pair added successfully.', 'id': new_id})
+    except sqlite3.IntegrityError:
+        return jsonify({'status': 'info', 'message': 'QA pair may already exist.'}), 200
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error for user '{user_id}' in add_qa_question: {e}")
+        return jsonify({'status': 'error', 'message': f"Database error: {e}"}), 500
+
+@app.route('/api/train', methods=['POST'])
+@api_login_required
+def train_model():
+    user_id = session['username']
+    dataset_id = session.get('active_dataset_id')
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+    vn = get_vanna_instance(user_id)
+    vn = configure_vanna_for_request(vn, user_id, dataset_id)
+
+    def generate_progress():
+        try:
+            ddl = request.form.get('ddl')
+            documentation = request.form.get('doc', '')
+            qa_pairs_json = request.form.get('qa_pairs')
+            qa_pairs = json.loads(qa_pairs_json) if qa_pairs_json else []
+
+            yield f"data: {json.dumps({'percentage': 0, 'message': '開始訓練...', 'log': 'Training process initiated.'})}\n\n"
+            app.logger.info("Training process initiated.")
+            
+            total_steps = (1 if ddl else 0) + (1 if documentation else 0) + (1 if qa_pairs else 0)
+            completed_steps = 0
+
+            if ddl:
+                app.logger.info("Starting DDL training.")
+                vn.train(ddl=ddl)
+                completed_steps += 1
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': 'DDL 訓練完成。', 'log': 'DDL training completed.'})}\n\n"
+                app.logger.info("DDL training completed.")
+            
+            if documentation:
+                app.logger.info("Starting documentation training.")
+                vn.train(documentation=documentation)
+                completed_steps += 1
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': '文件訓練完成。', 'log': 'Documentation training completed.'})}\n\n"
+                app.logger.info("Documentation training completed.")
+
+            if qa_pairs:
+                app.logger.info(f"Starting QA pair training for {len(qa_pairs)} pairs.")
+                for pair in qa_pairs:
+                    if pair.get('question') and pair.get('sql'):
+                        vn.train(question=pair['question'], sql=pair['sql'])
+                completed_steps += 1
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': f'問答配對 ({len(qa_pairs)} 組) 訓練完成。', 'log': f'QA pair training for {len(qa_pairs)} pairs completed.'})}\n\n"
+                app.logger.info(f"QA pair training for {len(qa_pairs)} pairs completed.")
+
+            yield f"data: {json.dumps({'percentage': 100, 'message': '所有訓練步驟已完成。', 'log': 'All training steps completed.'})}\n\n"
+            app.logger.info("All training steps completed.")
+
+        except Exception as e:
+            app.logger.error(f"Training failed for user '{user_id}': {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return Response(stream_with_context(generate_progress()), mimetype='text/event-stream')
+
+@app.route('/api/ask', methods=['POST'])
+@api_login_required
+def ask_question():
+    user_id = session['username']
+    data = request.json
+    question = data.get('question')
+    if not question:
+        return jsonify({'status': 'error', 'message': 'Question is required.'}), 400
+
+    vn_instance = get_vanna_instance(user_id)
+    dataset_id = session.get('active_dataset_id')
+
+    def run_vanna_in_thread(vn_instance: MyVanna, question: str, dataset_id: str, user_id: str):
+        """
+        在新執行緒中執行 Vanna 相關操作，並將日誌傳送到主應用程式的隊列。
+        """
+        try:
+            # 確保使用傳入的 vn_instance
+            vn = configure_vanna_for_request(vn_instance, user_id, dataset_id)
+        
+            # Try to load training data from the temporary file
+            try:
+                temp_dir = os.path.join(os.getcwd(), 'temp_vanna_data')
+                if os.path.exists(temp_dir):
+                    # Find the latest temporary file for the current user and dataset
+                    latest_file = None
+                    latest_timestamp = 0
+                    for filename in os.listdir(temp_dir):
+                        if filename.startswith(f"training_data_{user_id}_{dataset_id}_") and filename.endswith(".json"):
+                            try:
+                                # Extract timestamp from filename
+                                timestamp_str = filename.split('_')[-1].split('.')[0]
+                                timestamp = int(timestamp_str)
+                                if timestamp > latest_timestamp:
+                                    latest_timestamp = timestamp
+                                    latest_file = os.path.join(temp_dir, filename)
+                            except ValueError:
+                                continue # Skip files with invalid timestamp format
+
+                    if latest_file and os.path.exists(latest_file):
+                        with open(latest_file, 'r', encoding='utf-8') as f:
+                            temp_training_data = json.load(f)
+                        
+                        vn.log(f"從暫存文件加載訓練數據: {latest_file}", "資訊")
+                        app.logger.info(f"Loading training data from temporary file: {latest_file}")
+                        app.logger.info(f"Temporary training data content: {json.dumps(temp_training_data, ensure_ascii=False, indent=2)}")
+
+                        # Load documentation
+                        if temp_training_data.get('documentation'):
+                            # 確保 documentation 是字串，以避免型別錯誤
+                            documentation_data = temp_training_data['documentation']
+                            if isinstance(documentation_data, list):
+                                for doc_item in documentation_data:
+                                    if isinstance(doc_item, str):
+                                        vn.train(documentation=doc_item)
+                                    else:
+                                        vn.log(f"跳過無效的文檔項目: {doc_item}", "警告")
+                            elif isinstance(documentation_data, str):
+                                vn.train(documentation=documentation_data)
+                            else:
+                                vn.log(f"跳過無效的文檔數據類型: {type(documentation_data)}", "警告")
+                            vn.log("已從暫存文件加載文檔", "資訊")
+                            app.logger.info("Loaded documentation from temp file.")
+                            app.logger.info(f"Vanna training data count after documentation: {len(vn.get_training_data())}")
+
+                        # Load QA pairs
+                        if temp_training_data.get('qa_pairs'):
+                            for qa_pair in temp_training_data['qa_pairs']:
+                                if isinstance(qa_pair, dict) and qa_pair.get('question') and qa_pair.get('sql'):
+                                    # 確保 question 和 sql 都是字串
+                                    question_str = str(qa_pair['question'])
+                                    sql_str = str(qa_pair['sql'])
+                                    vn.train(question=question_str, sql=sql_str)
+                                else:
+                                    vn.log(f"跳過無效的問答配對項目: {qa_pair}", "警告")
+                            vn.log(f"已從暫存文件加載 {len(temp_training_data.get('qa_pairs', []))} 個問答配對", "資訊")
+                            app.logger.info(f"Loaded {len(temp_training_data.get('qa_pairs', []))} QA pairs from temp file.")
+                            app.logger.info(f"Vanna training data count after QA pairs: {len(vn.get_training_data())}")
+                        
+                        # Load dataset analysis (as documentation)
+                        if temp_training_data.get('dataset_analysis'):
+                            # 確保 dataset_analysis 是字串，以避免型別錯誤
+                            dataset_analysis_data = temp_training_data['dataset_analysis']
+                            if isinstance(dataset_analysis_data, list):
+                                for analysis_item in dataset_analysis_data:
+                                    if isinstance(analysis_item, str):
+                                        vn.train(documentation=analysis_item)
+                                    else:
+                                        vn.log(f"跳過無效的數據集分析項目: {analysis_item}", "警告")
+                            elif isinstance(dataset_analysis_data, str):
+                                vn.train(documentation=dataset_analysis_data)
+                            else:
+                                vn.log(f"跳過無效的數據集分析數據類型: {type(dataset_analysis_data)}", "警告")
+                            vn.log("已從暫存文件加載數據集分析", "資訊")
+                            app.logger.info("Loaded dataset analysis from temp file.")
+                            app.logger.info(f"Vanna training data count after dataset analysis: {len(vn.get_training_data())}")
+                    else:
+                        app.logger.info("No temporary training data file found for current user/dataset.")
+                else:
+                    app.logger.info("Temporary Vanna data directory does not exist.")
+            except Exception as e:
+                app.logger.error(f"Error loading training data from temporary file in ask function: {e}")
+                vn.log(f"從暫存文件加載訓練數據時出錯: {e}", "錯誤")
+
+            # 現在所有操作都將使用同一個 vn 實例及其 log_queue
+            sql = vn.generate_sql(question=question)
+
+            # 檢查並修正不完整的 WITH 語句
+            if re.match(r'^\s*WITH\s+.*?\)\s*$', sql, re.DOTALL | re.IGNORECASE):
+                # 嘗試從 WITH 語句中提取 CTE 名稱
+                cte_match = re.match(r'^\s*WITH\s+(\w+)\s+AS\s+\(', sql, re.DOTALL | re.IGNORECASE)
+                if cte_match:
+                    cte_name = cte_match.group(1)
+                    corrected_sql = f"{sql}\nSELECT * FROM {cte_name};"
+                    app.logger.warning(f"Detected incomplete WITH statement. Corrected SQL: {corrected_sql}")
+                    vn.log(f"檢測到不完整的 WITH 語句，已嘗試修正為: {corrected_sql}", "警告")
+                    sql = corrected_sql
+                else:
+                    app.logger.warning(f"Detected incomplete WITH statement but could not extract CTE name. Original SQL: {sql}")
+                    vn.log(f"檢測到不完整的 WITH 語句，但無法提取 CTE 名稱。原始 SQL: {sql}", "警告")
+
+            try:
+                df = vn.run_sql(sql=sql)
+            except OperationalError as e:
+                app.logger.error(f"SQL execution failed: {e}", exc_info=True)
+                vn.log(f"SQL 執行失敗: {e}", "錯誤")
+                df = pd.DataFrame() # 建立一個空的 DataFrame，讓後續流程可以繼續
+        
+            # correct_sql = None # Commented out as correct_sql is not implemented
+            if df.empty:
+                app.logger.warning("SQL 查詢結果為空，嘗試修正 SQL...")
+                vn.log("SQL 查詢結果為空，嘗試修正 SQL...", "警告")
+                # correct_sql = vn.correct_sql(question=question, sql=sql, error=None) # Commented out as correct_sql is not implemented
+                # if correct_sql:
+                #     sql = correct_sql
+                #     df = vn.run_sql(sql=sql)
+                #     vn.log("已生成修正後的 SQL 並執行", "資訊")
+        
+            app.logger.info(f"Generated SQL: {sql}")
+            app.logger.info(f"SQL Result: {df.head()}")
+
+            # --- 動態生成提示詞並發送給 Ollama 進行分析 ---
+            analysis_result = None
+            try:
+                # 讀取 ask_analysis_prompt.txt 模板
+                ask_analysis_prompt_template = load_prompt_template('ask_analysis_prompt.txt')
+
+                # 讀取所有日誌內容
+                all_logs_content = _get_all_ask_logs(user_id)
+
+                # 格式化相似問題和 SQL 範例
+                formatted_similar_qa = all_logs_content.get("get_similar_question_sql_results", "無")
+                
+                # 填充模板
+                dynamic_prompt_content = ask_analysis_prompt_template.replace(
+                    "[用戶提出的原始自然語言問題]", question
+                ).replace(
+                    "[列出檢索到的相似問題和 SQL 範例]", formatted_similar_qa
+                ).replace(
+                    "[列出檢索到的相關 DDL 語句]", all_logs_content.get("get_related_ddl_results", "無")
+                ).replace(
+                    "[列出檢索到的相關業務文件內容]", all_logs_content.get("get_related_documentation_results", "無")
+                )
+
+                # 保存動態提示詞到歷史紀錄
+                try:
+                    prompt_history_dir = os.path.join(os.getcwd(), 'prompt_history')
+                    os.makedirs(prompt_history_dir, exist_ok=True)
+                    timestamp = int(time.time())
+                    prompt_filename = f"{user_id}_dynamic_prompt_{timestamp}.txt"
+                    prompt_filepath = os.path.join(prompt_history_dir, prompt_filename)
+                    with open(prompt_filepath, 'w', encoding='utf-8') as f:
+                        f.write(dynamic_prompt_content)
+                    app.logger.info(f"Dynamic prompt saved to history: {prompt_filepath}")
+                except Exception as e:
+                    app.logger.error(f"Error saving dynamic prompt to history: {e}")
+
+                # 將動態提示詞發送給 Ollama 進行分析 (支援分塊)
+                try:
+                    vn.log("正在將思考過程發送給 Ollama 進行分析...", "資訊")
+                    app.logger.info(f"Sending dynamic prompt to Ollama for analysis for user '{user_id}'. Total prompt length: {len(dynamic_prompt_content)}")
+
+                    CHUNK_SIZE = 8000  # 設定每個分塊的大小
+                    if len(dynamic_prompt_content) > CHUNK_SIZE:
+                        # 如果提示詞過長，則進行分塊處理
+                        chunks = [dynamic_prompt_content[i:i + CHUNK_SIZE] for i in range(0, len(dynamic_prompt_content), CHUNK_SIZE)]
+                        analysis_parts = []
+                        vn.log(f"提示詞過長，將分 {len(chunks)} 個區塊進行分析。", "資訊")
+                        
+                        for i, chunk in enumerate(chunks):
+                            vn.log(f"正在分析第 {i+1}/{len(chunks)} 個區塊...", "資訊")
+                            app.logger.info(f"Analyzing chunk {i+1}/{len(chunks)} for user '{user_id}'. Chunk size: {len(chunk)}")
+                            # 為每個分塊添加上下文提示，以確保分析的連貫性
+                            chunk_prompt = f"這是大型分析任務的一部分 (區塊 {i+1}/{len(chunks)})。請專注於分析以下內容，並保持與之前區塊的連貫性：\n\n{chunk}"
+                            part_result = vn.submit_prompt([{'role': 'user', 'content': chunk_prompt}])
+                            analysis_parts.append(part_result)
+                        
+                        analysis_result = "\n\n---\n\n".join(analysis_parts)
+                        vn.log("所有區塊分析完成，已合併結果。", "資訊")
+                    else:
+                        # 如果提示詞長度在限制內，則直接發送
+                        analysis_result = vn.submit_prompt([{'role': 'user', 'content': dynamic_prompt_content}])
+
+                    vn.log("Ollama 分析完成。", "資訊")
+                    app.logger.info(f"Ollama analysis result for user '{user_id}'. Result length: {len(analysis_result) if analysis_result else 0}")
+
+                except Exception as e:
+                    error_message = f"Ollama 分析失敗: {e}"
+                    app.logger.error(error_message, exc_info=True)
+                    vn.log(error_message, "錯誤")
+                    analysis_result = error_message
+
+                # 清理所有日誌文件
+                _delete_all_ask_logs(user_id)
+
+            except Exception as e:
+                app.logger.error(f"Error generating, sending to Ollama, or saving dynamic prompt: {e}", exc_info=True)
+                vn.log(f"生成、發送給 Ollama 或保存動態提示詞時出錯: {e}", "錯誤")
+            # --- 動態生成提示詞並發送給 Ollama 進行分析結束 ---
+        
+            # 從 vn 實例的 log_queue 中提取所有日誌
+            logs = []
+            while not vn.log_queue.empty():
+                logs.append(vn.log_queue.get())
+        
+            # 從日誌中提取所需的詳細資訊
+            similar_qa_details = [log['details'] for log in logs if log['step'] == '相似問題檢索完成']
+            ddl_details = [log['details'] for log in logs if log['step'] == 'DDL 檢索完成']
+            doc_details = [log['details'] for log in logs if log['step'] == '文件檢索完成']
+        
+            # 將結果放入主應用程式的隊列
+            app.logger.info(f"Final similar_qa_details: {similar_qa_details}")
+            app.logger.info(f"Final ddl_details: {ddl_details}")
+            app.logger.info(f"Final doc_details: {doc_details}")
+        
+            vn_instance.log_queue.put({
+                'type': 'result',
+                'sql': sql,
+                'df_json': df.to_json(orient='records'),
+                'similar_qa_details': similar_qa_details,
+                'ddl_details': ddl_details,
+                'doc_details': doc_details,
+                'analysis_result': analysis_result # Add the analysis result here
+            })
+        except Exception as e:
+            app.logger.exception("Error in Vanna thread")
+            vn_instance.log_queue.put({'type': 'error', 'message': str(e), 'traceback': traceback.format_exc()})
+        finally:
+            # 確保無論成功或失敗，都會發送一個結束信號
+            vn_instance.log_queue.put(None)
+
+    def stream_logs():
+        app.logger.info("開始串流日誌...")
+        # 在這裡啟動 Vanna 執行緒，確保其在日誌串流開始後運行
+        vanna_thread = threading.Thread(target=run_vanna_in_thread, args=(vn_instance, question, dataset_id, user_id))
+        vanna_thread.start()
+
+        while True:
+            item = vn_instance.log_queue.get()
+            if item is None:
+                app.logger.info("串流結束。")
+                break
+            # 將 Vanna 的日誌或結果發送到前端
+            if item['type'] == 'log':
+                yield f"data: {json.dumps({'type': 'log', 'step': item['step'], 'message': item['message'], 'level': item['level']})}\n\n"
+            elif item['type'] == 'result':
+                # 當 Vanna 執行完成並將結果放入隊列時，發送結果
+                yield f"data: {json.dumps({'type': 'result', 'sql': item['sql'], 'df_json': item['df_json'], 'similar_qa_details': item['similar_qa_details'], 'ddl_details': item['ddl_details'], 'doc_details': item['doc_details'], 'analysis_result': item.get('analysis_result')})}\n\n"
+            elif item['type'] == 'error':
+                yield f"data: {json.dumps({'type': 'error', 'message': item['message'], 'traceback': item['traceback']})}\n\n"
+            
+        vanna_thread.join() # 等待 Vanna 執行緒完成
+
+    return Response(stream_with_context(stream_logs()), mimetype='text/event-stream')
 
 @app.route('/api/generate_qa_from_sql', methods=['POST'])
+@api_login_required
 def generate_qa_from_sql():
-    """
-    API 端點：從上傳的 .sql 文件串流生成問答配對。
-    """
+    user_id = session['username']
     if 'sql_file' not in request.files:
         return jsonify({'status': 'error', 'message': 'No sql_file part in the request'}), 400
 
     file = request.files['sql_file']
-
     if file.filename == '':
         return jsonify({'status': 'error', 'message': 'No selected file'}), 400
 
@@ -599,649 +808,432 @@ def generate_qa_from_sql():
     sql_content = file.read().decode('utf-8')
 
     def stream_qa_generation(sql_content):
-        """生成器函式，用於串流問答配對的生成過程。"""
-        try:
-            app.logger.info("Entered stream_qa_generation function.")
-            queries = [q.strip() for q in sql_content.split(';') if q.strip()]
-            total_queries = len(queries)
-
-            # 1. Yield 一個初始事件，包含總數
-            yield f"data: {json.dumps({'status': 'starting', 'total': total_queries})}\n\n"
-
-            system_prompt = "You are an expert at guessing the business question that a SQL query is answering. The user will provide a SQL query. Your task is to return a single, concise business question, in Traditional Chinese (繁體中文), that the SQL query answers. Do not add any explanation or preamble."
-
-            # 2. 遍歷查詢並生成問答
-            llm_host = os.getenv('OLLAMA_HOST', 'N/A')
-            llm_model = os.getenv('OLLAMA_MODEL', 'N/A')
-            app.logger.info(f"Starting QA generation for {total_queries} queries using model '{llm_model}' at host '{llm_host}'.")
-            
-            for i, sql_query in enumerate(queries):
-                qa_pair = {}
-                try:
-                    app.logger.info(f"[Query {i+1}/{total_queries}] Sending SQL to LLM: {sql_query}")
-                    question = vn.submit_prompt([
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': sql_query}
-                    ])
-                    
-                    if question:
-                        app.logger.info(f"[Query {i+1}/{total_queries}] Generated Question: {question}")
-                        qa_pair = {'question': question, 'sql': sql_query}
-                    else:
-                        # 如果無法生成問題，也提供一個有效的結構
-                        qa_pair = {'question': '無法為此 SQL 生成問題。', 'sql': sql_query}
-    
-                except Exception as e:
-                    app.logger.error(f"[Query {i+1}/{total_queries}] Could not generate question for SQL: {sql_query}. Error: {e}")
-                    qa_pair = {'question': f"生成問題時發生錯誤: {str(e)}", 'sql': sql_query}
-                
-                # 3. Yield 一個進度事件，包含當前計數、總數和生成的配對
-                yield f"data: {json.dumps({'status': 'progress', 'count': i + 1, 'total': total_queries, 'qa_pair': qa_pair})}\n\n"
-            
-            # 4. Yield 一個最終的完成事件
-            yield f"data: {json.dumps({'status': 'completed', 'message': '問答配對已全部生成！'})}\n\n"
-
-        except Exception as e:
-            # 在發生錯誤時，記錄詳細的錯誤日誌並發送事件
-            app.logger.error(f"An error occurred in stream_qa_generation: {e}", exc_info=True)
-            error_message = json.dumps({'status': 'error', 'message': str(e)})
-            yield f"data: {error_message}\n\n"
-
-    # 5. 返回串流響應
-    return Response(stream_with_context(stream_qa_generation(sql_content)), mimetype='text/event-stream')
-
-
-@app.route('/api/regenerate_question', methods=['POST'])
-def regenerate_question():
-    """
-    API 端點：為單一的 SQL 查詢重新生成問題。
-    """
-    data = request.get_json()
-    sql_query = data.get('sql')
-
-    if not sql_query:
-        return jsonify({'status': 'error', 'message': 'SQL query is required.'}), 400
-
-    try:
-        # 定義一個包含繁體中文指令的系統提示詞
-        system_prompt = "You are an expert at guessing the business question that a SQL query is answering. The user will provide a SQL query. Your task is to return a single, concise business question, in Traditional Chinese (繁體中文), that the SQL query answers. Do not add any explanation or preamble."
-
-        # 組合提示詞並發送給 LLM
-        question = vn.submit_prompt([
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': sql_query}
-        ])
-        if question:
-            return jsonify({'question': question})
-        else:
-            return jsonify({'status': 'error', 'message': 'Failed to generate question.'}), 500
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-@app.route('/api/get_training_data', methods=['GET'])
-def get_training_data():
-    """
-    API 端點：獲取所有已儲存的訓練資料。
-    """
-    db_path = os.getenv('TRAINING_DATA_DB_PATH')
-    if not db_path or not os.path.exists(db_path):
-        return jsonify({
-            'ddl': [],
-            'documentation': [],
-            'qa_pairs': []
-        })
-    
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row # 允許按列名訪問
-        cursor = conn.cursor()
-
-        # 1. 獲取 DDL
-        cursor.execute("SELECT ddl_statement FROM training_ddl")
-        ddl_rows = cursor.fetchall()
-        ddls = [row['ddl_statement'] for row in ddl_rows]
-
-        # 2. 獲取文件
-        cursor.execute("SELECT documentation_text FROM training_documentation")
-        doc_rows = cursor.fetchall()
-        docs = [row['documentation_text'] for row in doc_rows]
-
-        # 3. 獲取 QA 配對 (包含 id)
-        cursor.execute("SELECT id, question, sql_query FROM training_qa")
-        qa_rows = cursor.fetchall()
-        qa_pairs = [{'id': row['id'], 'question': row['question'], 'sql': row['sql_query']} for row in qa_rows]
-
-        conn.close()
-
-        return jsonify({
-            'ddl': ddls,
-            'documentation': docs,
-            'qa_pairs': qa_pairs
-        })
-
-    except sqlite3.Error as e:
-        return jsonify({'status': 'error', 'message': f"Database error: {e}"}), 500
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-@app.route('/api/update_qa_question', methods=['POST'])
-def update_qa_question():
-    """
-    API 端點：更新單一問答配對的問題。
-    """
-    data = request.get_json()
-    qa_id = data.get('id')
-    new_question = data.get('question')
-
-    logging.info(f"Received update_qa_question request: qa_id={qa_id}, new_question={new_question}")
-
-    if not qa_id or new_question is None:
-        logging.warning(f"Invalid request for update_qa_question: qa_id={qa_id}, new_question={new_question}")
-        return jsonify({'status': 'error', 'message': 'ID and question are required.'}), 400
-
-    db_path = os.getenv('TRAINING_DATA_DB_PATH')
-    if not db_path:
-        logging.error("TRAINING_DATA_DB_PATH not configured.")
-        return jsonify({'status': 'error', 'message': 'Training database path not configured.'}), 500
-
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE training_qa SET question = ? WHERE id = ?", (new_question, qa_id))
-        conn.commit()
-        
-        if cursor.rowcount == 0:
-            conn.close()
-            logging.warning(f"No QA pair found with id {qa_id} for update.")
-            return jsonify({'status': 'error', 'message': f'No QA pair found with id {qa_id}.'}), 404
-
-        conn.close()
-        logging.info(f"Successfully updated QA pair with id {qa_id}.")
-        return jsonify({'status': 'success', 'message': 'Question updated successfully.'})
-
-    except sqlite3.Error as e:
-        logging.exception(f"Database error during update_qa_question for id {qa_id}.")
-        return jsonify({'status': 'error', 'message': f"Database error: {e}"}), 500
-    except Exception as e:
-        logging.exception(f"Unexpected error during update_qa_question for id {qa_id}.")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-@app.route('/api/add_qa_question', methods=['POST'])
-def add_qa_question():
-    """
-    API 端點：添加新的問答配對。
-    """
-    data = request.get_json()
-    question = data.get('question')
-    sql_query = data.get('sql')
-
-    if not question or not sql_query:
-        return jsonify({'status': 'error', 'message': 'Question and SQL query are required.'}), 400
-
-    db_path = os.getenv('TRAINING_DATA_DB_PATH', 'training_data.sqlite') # Provide a default path
-    
-    # Ensure db_path is an absolute path
-    db_path = os.path.abspath(db_path)
-
-    if not db_path: # Check again after abspath, though unlikely to be empty
-        return jsonify({'status': 'error', 'message': 'Training database path not configured or is empty.'}), 500
-
-    # 確保資料庫文件存在，如果不存在則嘗試初始化
-    if not os.path.exists(db_path):
-        print(f"INFO: Training database file not found at '{db_path}'. Attempting to re-initialize.")
-        init_training_db()
-        if not os.path.exists(db_path):
-            return jsonify({'status': 'error', 'message': 'Training database could not be initialized.'}), 500
-
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # 檢查是否已存在相同的 question 和 sql_query
-        cursor.execute("SELECT id FROM training_qa WHERE question = ? AND sql_query = ?", (question, sql_query))
-        existing_qa = cursor.fetchone()
-
-        if existing_qa:
-            conn.close()
-            return jsonify({'status': 'info', 'message': 'QA pair already exists. Skipping addition.', 'id': existing_qa})
-        
-        cursor.execute("INSERT INTO training_qa (question, sql_query) VALUES (?, ?)", (question, sql_query))
-        new_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return jsonify({'status': 'success', 'message': 'QA pair added successfully.', 'id': new_id})
-
-    except sqlite3.Error as e:
-        app.logger.error(f"SQLite database error in add_qa_question: {e}", exc_info=True)
-        print(f"ERROR: SQLite database error in add_qa_question: {e}") # Add print for visibility
-        return jsonify({'status': 'error', 'message': f"Database error: {e}"}), 500
-    except Exception as e:
-        app.logger.error(f"Unexpected error in add_qa_question: {e}", exc_info=True)
-        print(f"ERROR: Unexpected error in add_qa_question: {e}") # Add print for visibility
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-@app.route('/api/train', methods=['POST'])
-def train_model():
-    """
-    API 端點：使用 DDL、文件和問答配對統一進行訓練。
-    此端點使用串流響應來回報進度。
-    """
-    def generate_progress():
-        try:
-            # 0. 發送開始信號
-            yield f"data: {json.dumps({'status': 'starting', 'message': '開始訓練...', 'percentage': 0})}\n\n"
-
-            # 1. 從請求中提取所有訓練資料
-            ddl = request.form.get('ddl')
-            documentation = request.form.get('doc', '')
-            qa_pairs_json = request.form.get('qa_pairs')
-
-            # 處理文件上傳
-            if 'doc_file' in request.files:
-                doc_file = request.files['doc_file']
-                if doc_file.filename != '':
-                    doc_content = doc_file.read().decode('utf-8')
-                    documentation += f"\n\n{doc_content}"
-
-            # 解析 QA 配對
-            qa_pairs = []
-            if qa_pairs_json:
-                try:
-                    qa_pairs = json.loads(qa_pairs_json)
-                    if not isinstance(qa_pairs, list):
-                        qa_pairs = [] # 如果格式不對，則清空
-                except json.JSONDecodeError:
-                    error_message = json.dumps({'status': 'error', 'message': 'Invalid JSON format for qa_pairs.'})
-                    yield f"data: {error_message}\n\n"
-                    return
-
-            # 2. 將訓練資料儲存到資料庫 (如果需要)
-            # 這部分可以保持同步，因為它通常很快
-            db_path = os.getenv('TRAINING_DATA_DB_PATH')
-            if db_path:
-                try:
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    if ddl:
-                        cursor.execute("INSERT INTO training_ddl (ddl_statement) VALUES (?)", (ddl,))
-                    if documentation:
-                        cursor.execute("INSERT INTO training_documentation (documentation_text) VALUES (?)", (documentation,))
-                    if qa_pairs:
-                        for pair in qa_pairs:
-                            if pair.get('question') and pair.get('sql'):
-                                # 檢查是否已存在相同的 question 和 sql_query
-                                cursor.execute("SELECT id FROM training_qa WHERE question = ? AND sql_query = ?", (pair['question'], pair['sql']))
-                                existing_qa = cursor.fetchone()
-                                if not existing_qa:
-                                    cursor.execute("INSERT INTO training_qa (question, sql_query) VALUES (?, ?)", (pair['question'], pair['sql']))
-                                else:
-                                    print(f"INFO: Skipping QA pair addition for already existing: Question='{pair['question'][:50]}...', SQL='{pair['sql'][:50]}...'")
-                    conn.commit()
-                    conn.close()
-                except sqlite3.Error as e:
-                    print(f"WARNING: Could not save training data to database '{db_path}': {e}")
-
-
-            # 3. 使用 Vanna 實例分步進行訓練並回報進度
-            total_steps = bool(ddl) + bool(documentation) + bool(qa_pairs)
-            completed_steps = 0
-            
-            if not total_steps:
-                message = 'No new training data was provided to train.'
-                yield f"data: {json.dumps({'status': 'completed', 'message': message, 'percentage': 100})}\n\n"
-                return
-
-            # 訓練 DDL
-            if ddl:
-                vn.train(ddl=ddl)
-                completed_steps += 1
-                percentage = int((completed_steps / total_steps) * 100) if total_steps > 0 else 0
-                yield f"data: {json.dumps({'status': 'progress', 'percentage': percentage, 'message': 'DDL 訓練完成。'})}\n\n"
-
-            # 訓練文件
-            if documentation:
-                vn.train(documentation=documentation)
-                completed_steps += 1
-                percentage = int((completed_steps / total_steps) * 100) if total_steps > 0 else 0
-                yield f"data: {json.dumps({'status': 'progress', 'percentage': percentage, 'message': '文件訓練完成。'})}\n\n"
-
-            # 訓練 QA 配對
-            trained_pairs = 0
-            if qa_pairs:
-                for pair in qa_pairs:
-                    if pair.get('question') and pair.get('sql'):
-                        vn.train(question=pair['question'], sql=pair['sql'])
-                        trained_pairs += 1
-                completed_steps += 1
-                percentage = int((completed_steps / total_steps) * 100) if total_steps > 0 else 0
-                yield f"data: {json.dumps({'status': 'progress', 'percentage': percentage, 'message': f'問答配對 ({trained_pairs} 組) 訓練完成。'})}\n\n"
-
-            # 4. 返回最終結果
-            message = f"Training completed successfully. Trained on: {1 if ddl else 0} DDL, {1 if documentation else 0} documentation, {trained_pairs} QA pairs."
-            llm_info = {
-                'model': os.getenv('OLLAMA_MODEL'),
-                'host': os.getenv('OLLAMA_HOST')
-            }
-            yield f"data: {json.dumps({'status': 'completed', 'message': message, 'llm_info': llm_info, 'percentage': 100})}\n\n"
-
-        except Exception as e:
-            error_message = json.dumps({'status': 'error', 'message': str(e)})
-            yield f"data: {error_message}\n\n"
-
-    return Response(stream_with_context(generate_progress()), mimetype='text/event-stream')
-
-
-@app.route('/api/ask', methods=['POST'])
-def ask_question():
-    """
-    API 端點：接收用戶問題，並以串流方式返回思考過程和最終的 SQL。
-    """
-    data = request.json
-    question = data.get('question')
-
-    if not question:
-        return jsonify({'status': 'error', 'message': 'Question is required.'}), 400
-
-    def generate_response_stream():
-        import re # Explicitly import re within the function scope
-        final_sql = None
-        try:
-            app.logger.info(f"Received question: {question}")
-            app.logger.info("Generating SQL with Vanna in streaming mode...")
-
-            sql_generator = vn.generate_sql(question=question, allow_llm_to_see_data=True)
-            
-            final_sql = None
-            sql_buffer = []
-
-            for chunk in sql_generator:
-                if hasattr(chunk, 'sql') and chunk.sql:
-                    final_sql = chunk.sql
-                    break
-                elif isinstance(chunk, str):
-                    yield f"data: {json.dumps({'type': 'thinking_step', 'content': chunk})}\n\n"
-                    sql_buffer.append(chunk)
-
-            if final_sql is None:
-                full_response_str = "".join(sql_buffer).strip()
-                sql_match = re.search(r"SELECT.*", full_response_str, re.DOTALL | re.IGNORECASE)
-                if sql_match:
-                    final_sql = sql_match.group(0)
-
-            if final_sql:
-                app.logger.info(f"Final Extracted SQL: {final_sql}")
-                yield f"data: {json.dumps({'type': 'sql_result', 'sql': final_sql})}\n\n"
-            else:
-                raise Exception("Could not extract final SQL from Vanna's response.")
-
-        except Exception as e:
-            app.logger.error(f"An error occurred during SQL generation: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': f'SQL Generation Error: {e}'})}\n\n"
+        user_id = session['username']
+        dataset_id = session.get('active_dataset_id')
+        if not dataset_id:
+            yield f"data: {json.dumps({'status': 'error', 'message': 'No active dataset selected.'})}\n\n"
             return
 
-        # --- Execute SQL ---
         try:
-            if not hasattr(vn, 'run_sql_is_set') or not vn.run_sql_is_set:
-                app.logger.info("Database connection not established before running SQL.")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Database connection not established. Please connect to a database first.'})}\n\n"
-                return
-
-            app.logger.info(f"Executing SQL with vn.run_sql...")
-            # 從 final_sql 中提取純粹的 SQL 語句，或直接使用 final_sql
-            import re
-            sql_match = re.search(r'Extracted SQL:\s*(.*)', final_sql, re.DOTALL)
-            if sql_match:
-                cleaned_sql = sql_match.group(1).strip()
-                app.logger.info(f"Cleaned SQL (extracted): {cleaned_sql}")
-            else:
-                cleaned_sql = final_sql.strip()
-                app.logger.info(f"Cleaned SQL (direct use): {cleaned_sql}")
-
-            if cleaned_sql:
-                # 檢查 SQL 是否包含 CTE 語法，如果包含，則在前面加上 WITH 關鍵字
-                # 判斷是否為缺少 WITH 的 CTE 語法
-                # 條件：以 SELECT 開頭，且在某個 ')' 後面緊接著 'CTE_NAME AS (' 的模式
-                if re.match(r"^\s*SELECT.*?\)\s*(\w+)\s*AS\s*\(", cleaned_sql, re.DOTALL | re.IGNORECASE):
-                    cleaned_sql = "WITH " + cleaned_sql
-                df = vn.run_sql(sql=cleaned_sql)
-            else:
-                raise Exception("Could not determine SQL from Vanna's response.")
-            result_string = df.to_string()
-            yield f"data: {json.dumps({'type': 'data_result', 'data': result_string})}\n\n"
-
+            vn = get_vanna_instance(user_id)
+            vn = configure_vanna_for_request(vn, user_id)
+            queries = [q.strip() for q in sql_content.split(';') if q.strip()]
+            total_queries = len(queries)
+            yield f"data: {json.dumps({'status': 'starting', 'total': total_queries, 'message': '開始生成問答配對...'})}\n\n"
+            qa_system_prompt = load_prompt_template('qa_generation_system_prompt.txt')
+            
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                for i, sql_query in enumerate(queries):
+                    try:
+                        question = vn.submit_prompt([
+                            {'role': 'system', 'content': qa_system_prompt},
+                            {'role': 'user', 'content': sql_query}
+                        ])
+                        
+                        cursor.execute(
+                            "INSERT INTO training_qa (question, sql_query, table_name, dataset_id) VALUES (?, ?, ?, ?)",
+                            (question, sql_query, 'global', dataset_id)
+                        )
+                        conn.commit()
+                        
+                        percentage = int(((i + 1) / total_queries) * 100)
+                        yield f"data: {json.dumps({'status': 'progress', 'percentage': percentage, 'message': f'已生成 {i + 1}/{total_queries} 個問答配對', 'qa_pair': {'question': question, 'sql': sql_query}})}\n\n"
+                    except Exception as e:
+                        app.logger.error(f"Error generating QA for query '{sql_query}': {e}", exc_info=True)
+                        yield f"data: {json.dumps({'status': 'warning', 'message': f'生成問題時發生錯誤: {str(e)} (SQL: {sql_query[:50]}...)'})}\n\n"
+                
+            yield f"data: {json.dumps({'status': 'completed', 'percentage': 100, 'message': '問答配對已全部生成並儲存！'})}\n\n"
         except Exception as e:
-            app.logger.error(f"Error executing SQL with vn.run_sql: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': f'SQL Execution Error: {e}'})}\n\n"
+            app.logger.error(f"An error occurred in stream_qa_generation: {e}", exc_info=True)
+            yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
 
-    return Response(stream_with_context(generate_response_stream()), mimetype='text/event-stream')
+    return Response(stream_with_context(stream_qa_generation(sql_content)), mimetype='text/event-stream')
 
-@app.route('/api/generate_questions', methods=['POST'])
-def generate_questions():
-    """
-    API 端點：自動生成訓練問題並立即用於訓練。
-    """
-    # 生成問題
-    try:
-        questions = vn.generate_questions()
-        if not questions:
-            return jsonify({'status': 'success', 'message': 'No new questions were generated.', 'questions': []})
-
-        # 使用生成的問題進行訓練
-        for q in questions:
-            # 假設 q 是一個包含 'question' 和 'sql' 的字典
-            if q.get('question') and q.get('sql'):
-                vn.train(question=q.get('question'), sql=q.get('sql'))
-        
-        return jsonify({'status': 'success', 'message': f'{len(questions)} questions generated and model retrained.', 'questions': questions})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-@app.route('/api/reload_training_data', methods=['POST'])
-def reload_training_data():
-    """
-    API 端點：重新載入訓練資料並重新訓練 Vanna 模型。
-    """
-    try:
-        load_training_data_from_db(vn)
-        return jsonify({'status': 'success', 'message': 'Training data reloaded and model retrained successfully.'})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': f'Failed to reload training data: {str(e)}'}), 500
-
-@app.route('/api/deduplicate_qa', methods=['POST'])
-def deduplicate_qa():
-    """
-    API 端點：清理 training_qa 表中的重複問答對。
-    """
-    db_path = os.getenv('TRAINING_DATA_DB_PATH')
-    if not db_path or not os.path.exists(db_path):
-        return jsonify({'status': 'error', 'message': 'Training database path not configured or database file not found.'}), 500
+@app.route('/api/generate_documentation', methods=['POST'])
+@api_login_required
+def generate_documentation():
+    user_id = session['username']
+    data = request.get_json()
+    ddl = data.get('ddl')
+    if not ddl:
+        return jsonify({'status': 'error', 'message': 'DDL is required.'}), 400
 
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        vn = get_vanna_instance(user_id)
+        vn = configure_vanna_for_request(vn, user_id)
+        documentation_prompt_content = load_prompt_template('documentation_prompt.txt')
+        prompt = documentation_prompt_content.format(ddl=ddl)
+        documentation_text = vn.submit_prompt([{'role': 'user', 'content': prompt}])
 
-        # 找到所有重複的問答對，並保留每個重複組中的一個最小 ID
-        cursor.execute("""
-            DELETE FROM training_qa
-            WHERE id NOT IN (
-                SELECT MIN(id)
-                FROM training_qa
-                GROUP BY question, sql_query
-            );
-        """)
-        deleted_count = cursor.rowcount
-        conn.commit()
-        conn.close()
-
-        response_data = {
+        if documentation_text:
+            dataset_id = session.get('active_dataset_id')
+            if dataset_id:
+                with get_user_db_connection(user_id) as conn:
+                    cursor = conn.cursor()
+                    analysis_table_name = '__dataset_analysis__'
+                    cursor.execute(
+                        "REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)",
+                        (dataset_id, analysis_table_name, documentation_text)
+                    )
+                    conn.commit()
+        return jsonify({
             'status': 'success',
-            'message': f'Successfully removed {deleted_count} duplicate QA pairs.',
-            'deleted_count': deleted_count
-        }
-        print(json.dumps(response_data, ensure_ascii=False, indent=4)) # 打印 JSON 響應到控制台
-        return jsonify(response_data)
-
-    except sqlite3.Error as e:
-        return jsonify({'status': 'error', 'message': f"Database error during deduplication: {e}"}), 500
+            'documentation': documentation_text or "無法生成文件。"
+        })
     except Exception as e:
-        return jsonify({'status': 'error', 'message': f"An unexpected error occurred during deduplication: {str(e)}"}), 500
-
-
-# --- Dataset Management API Endpoints ---
-@app.route('/api/datasets', methods=['GET', 'POST'])
-@api_login_required
-def handle_datasets():
-    global active_dataset_id, active_dataset_engine
-    db_path = os.getenv('TRAINING_DATA_DB_PATH', 'training_data.sqlite')
-    
-    if request.method == 'GET':
-        try:
-            with sqlite3.connect(db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("SELECT id, dataset_name, created_at FROM datasets ORDER BY created_at DESC")
-                return jsonify({'status': 'success', 'datasets': [dict(row) for row in cursor.fetchall()]})
-        except Exception as e:
-            return jsonify({'status': 'error', 'message': str(e)}), 500
-    
-    if request.method == 'POST':
-        dataset_name = request.form.get('dataset_name')
-        files = request.files.getlist('files')
-        if not dataset_name or not files:
-            return jsonify({'status': 'error', 'message': 'Dataset name and files are required.'}), 400
-        
-        dataset_id = uuid.uuid4().hex[:12]
-        dataset_db_path = get_dataset_db_path(dataset_id)
-
-        try:
-            engine = create_engine(f'sqlite:///{dataset_db_path}')
-            for file in files:
-                df = pd.read_csv(file.stream)
-                table_name = os.path.splitext(secure_filename(file.filename))[0].replace('-', '_').replace(' ', '_')
-                df.to_sql(table_name, engine, index=False, if_exists='replace')
-            
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("INSERT INTO datasets (dataset_name, db_path) VALUES (?, ?)", (dataset_name, dataset_db_path))
-                new_id = cursor.lastrowid
-                conn.commit()
-            
-            return jsonify({'status': 'success', 'dataset': {'id': new_id, 'dataset_name': dataset_name}}), 201
-        except Exception as e:
-            if os.path.exists(dataset_db_path): 
-                os.remove(dataset_db_path)
-            return jsonify({'status': 'error', 'message': str(e)}), 500
-
-@app.route('/api/datasets/activate', methods=['POST'])
-@api_login_required
-def activate_dataset():
-    global active_dataset_id, active_dataset_engine, vn
-    dataset_id = request.get_json().get('dataset_id')
-    if not dataset_id:
-        return jsonify({'status': 'error', 'message': 'dataset_id is required.'}), 400
-    
-    try:
-        db_path = os.getenv('TRAINING_DATA_DB_PATH', 'training_data.sqlite')
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT db_path, dataset_name FROM datasets WHERE id = ?", (dataset_id,))
-            row = cursor.fetchone()
-        
-        if row:
-            dataset_db_path, dataset_name = row
-            engine = create_engine(f"sqlite:///{dataset_db_path}")
-            vn.engine = engine
-            vn.run_sql = lambda sql: pd.read_sql_query(sql, engine)
-            vn.run_sql_is_set = True
-            active_dataset_id = dataset_id
-            active_dataset_engine = engine
-            
-            inspector = inspect(engine)
-            table_names = inspector.get_table_names()
-            schema_info = {name: [f"{col['name']} ({str(col['type'])})" for col in inspector.get_columns(name)] for name in table_names}
-            ddl_statements = []
-            with engine.connect() as connection:
-                for name in table_names:
-                    ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
-                    if ddl: ddl_statements.append(ddl + ";")
-
-            # Check if the model is already trained by looking for existing training data
-            training_data = vn.get_training_data()
-            is_trained = not training_data.empty
-
-            return jsonify({
-                'status': 'success',
-                'message': f"Dataset '{dataset_name}' activated.",
-                'active_dataset_id': dataset_id,
-                'schema': schema_info,
-                'ddl': ddl_statements,
-                'table_names': table_names,
-                'is_trained': is_trained
-            })
-        return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
-    except Exception as e:
+        app.logger.error(f"Error generating documentation for user '{user_id}': {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/api/datasets/<int:dataset_id>', methods=['DELETE'])
+@app.route('/api/analyze_schema', methods=['POST'])
 @api_login_required
-def delete_dataset(dataset_id):
-    global active_dataset_id, active_dataset_engine
-    db_path = os.getenv('TRAINING_DATA_DB_PATH', 'training_data.sqlite')
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT db_path, dataset_name FROM datasets WHERE id = ?", (dataset_id,))
-        row = cursor.fetchone()
-        if not row:
-            return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
-        dataset_db_path, dataset_name = row
+def analyze_schema():
+    user_id = session['username']
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
+    try:
+        vn = get_vanna_instance(user_id)
+        vn = configure_vanna_for_request(vn, user_id, dataset_id)
+
+        # 1. 獲取 DDL
+        inspector = inspect(vn.engine)
+        table_names = inspector.get_table_names()
+        ddl_statements = []
+        with vn.engine.connect() as connection:
+            for name in table_names:
+                ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
+                if ddl: ddl_statements.append(ddl + ";")
+        full_ddl = "\n".join(ddl_statements)
+
+        # 2. 獲取知識背景文件
+        with get_user_db_connection(user_id) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT documentation_text FROM training_documentation WHERE dataset_id = ? AND table_name != '__dataset_analysis__'", (dataset_id,))
+            documentation_rows = cursor.fetchall()
+            knowledge_docs = "\n".join([row['documentation_text'] for row in documentation_rows])
+
+            # 3. 獲取 SQL 問答配對
+            cursor.execute("SELECT question, sql_query FROM training_qa WHERE dataset_id = ?", (dataset_id,))
+            qa_pairs_rows = cursor.fetchall()
+            qa_pairs_str = "\n".join([f"問: {row['question']}\n答: {row['sql_query']}" for row in qa_pairs_rows])
+
+        # 4. 組裝提示
+        documentation_prompt_content = load_prompt_template('documentation_prompt.txt')
         
-        if active_dataset_id == dataset_id:
-            active_dataset_id = None
-            active_dataset_engine = None
-            vn = MyVanna()
-            vn.engine = None
-            vn.run_sql = None
-            vn.run_sql_is_set = False
-        
-        cursor.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
-        conn.commit()
-        
-        if os.path.exists(dataset_db_path):
-            os.remove(dataset_db_path)
-            
-        return jsonify({'status': 'success', 'message': f'Dataset "{dataset_name}" deleted successfully.'})
+        # 根據 prompt 模板的預期格式組裝
+        prompt_content = f"""
+DDL 語句:
+{full_ddl}
+
+業務術語:
+{knowledge_docs if knowledge_docs else "無"}
+
+SQL 查詢集合:
+{qa_pairs_str if qa_pairs_str else "無"}
+
+請務必以繁體中文生成所有分析結果和建議。
+"""
+        prompt = documentation_prompt_content + prompt_content
+
+        # 5. 呼叫 LLM
+        analysis_documentation = vn.submit_prompt([{'role': 'user', 'content': prompt}])
+
+        # 6. 儲存分析結果
+        if analysis_documentation:
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                analysis_table_name = '__dataset_analysis__'
+                cursor.execute(
+                    "REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)",
+                    (dataset_id, analysis_table_name, analysis_documentation)
+                )
+                conn.commit()
+
+        # 7. 返回結果
+        app.logger.info(f"Schema analysis for user '{user_id}' completed. Analysis length: {len(analysis_documentation) if analysis_documentation else 0}")
+        return jsonify({
+            'status': 'success',
+            'analysis': analysis_documentation or "無法生成資料庫分析文件。"
+        })
+    except Exception as e:
+        app.logger.error(f"Schema analysis failed for user '{user_id}': {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/generate_documentation_from_analysis', methods=['POST'])
+@api_login_required
+def generate_documentation_from_analysis():
+    user_id = session['username']
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        app.logger.warning(f"User '{user_id}' attempted to generate documentation from analysis without an active dataset.")
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
+    try:
+        with get_user_db_connection(user_id) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT documentation_text FROM training_documentation WHERE dataset_id = ? AND table_name = '__dataset_analysis__'", (dataset_id,))
+            analysis_row = cursor.fetchone()
+            analysis_documentation = analysis_row['documentation_text'] if analysis_row else ""
+
+        if not analysis_documentation:
+            app.logger.info(f"No analysis documentation found for dataset '{dataset_id}' for user '{user_id}'.")
+            return jsonify({'status': 'error', 'message': 'No analysis documentation found for the active dataset.'}), 400
+
+        app.logger.info(f"Successfully retrieved analysis documentation for dataset '{dataset_id}' for user '{user_id}'. Length: {len(analysis_documentation)}")
+        return jsonify({
+            'status': 'success',
+            'documentation': analysis_documentation
+        })
+    except Exception as e:
+        app.logger.error(f"Error retrieving analysis documentation for user '{user_id}': {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/delete_all_qa', methods=['POST'])
+@api_login_required
+def delete_all_qa():
+    user_id = session['username']
+    dataset_id = session.get('active_dataset_id')
+
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'No active dataset selected.'}), 400
+
+    try:
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM training_qa WHERE dataset_id = ?", (dataset_id,))
+            conn.commit()
+        return jsonify({'status': 'success', 'message': '所有問答配對已刪除。'})
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error for user '{user_id}' in delete_all_qa: {e}")
+        return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
+
+@app.get('/ask/ui-sync')
+def ask_ui_sync():
+    html = '''<!doctype html>
+<html><head><meta charset="utf-8"><title>Ask Sync UI</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;margin:16px}
+  .row{margin:6px 0}
+  .thought-block{border:1px solid #ddd;padding:8px;margin:6px 0;border-radius:4px}
+  .thought-title{font-weight:bold;margin-bottom:4px}
+  .table{border-collapse:collapse;width:100%}
+  .table th,.table td{border:1px solid #ccc;padding:4px 6px}
+</style>
+</head>
+<body>
+  <h2>/api/ask 同步模式（顯示思考過程）</h2>
+  <div class="row">
+    <label>使用者：<input id="user_id" value="alice"></label>
+    <label>資料集ID：<input id="dataset_id" value="supermarket"></label>
+    <label>SQLite（可選）：<input id="sqlite_path" style="width:320px" placeholder="/path/to.db"></label>
+  </div>
+  <div class="row">
+    <label style="display:inline-block;width:90%">問題：<input id="question" style="width:90%" placeholder="請輸入您的問題"></label>
+    <button id="askBtn">送出</button>
+  </div>
+  <h3>思考過程</h3>
+  <div id="thinkingPanel"></div>
+  <h3>結果</h3>
+  <div id="resultPanel"></div>
+
+<script>
+const thinkingPanel = document.getElementById('thinkingPanel');
+const resultPanel = document.getElementById('resultPanel');
+const userEl = document.getElementById('user_id');
+const dsEl = document.getElementById('dataset_id');
+const spEl = document.getElementById('sqlite_path');
+const qEl = document.getElementById('question');
+const btn = document.getElementById('askBtn');
+
+function appendThought(title, content){
+  const box=document.createElement('div');
+  box.className='thought-block';
+  box.innerHTML=`<div class="thought-title">${title}</div><pre style="white-space:pre-wrap">${content||''}</pre>`;
+  thinkingPanel.appendChild(box);
+}
+function renderTable(rows){
+  if(!rows||rows.length===0){resultPanel.innerHTML='<p>（空結果）</p>';return;}
+  const cols=Object.keys(rows[0]);
+  let html='<table class="table"><thead><tr>';
+  cols.forEach(c=>html+=`<th>${c}</th>`);
+  html+='</tr></thead><tbody>';
+  rows.forEach(r=>{html+='<tr>'+cols.map(c=>`<td>${r[c]??''}</td>`).join('')+'</tr>';});
+  html+='</tbody></table>';
+  resultPanel.innerHTML=html;
+}
+async function ask(){
+  thinkingPanel.innerHTML='';
+  resultPanel.innerHTML='';
+  appendThought('狀態','⏳ 正在思考...');
+  const body={user_id:userEl.value,dataset_id:dsEl.value,sqlite_path:spEl.value,question:qEl.value,sync:true};
+  const res=await fetch('/api/ask?mode=sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const data=await res.json();
+  thinkingPanel.innerHTML='';
+  if(!data.success && !data.steps){
+    appendThought('錯誤',(data.errors&&data.errors.join('\n'))||'未知錯誤');
+    return;
+  }
+  (data.steps||[]).forEach(step=>{
+    const t=step.type;
+    if(t==='schema'){
+      appendThought('Schema 表清單',(step.tables||[]).join('\n'));
+    }else if(t==='retrieval'){
+      if(step.similar_pairs){appendThought('相似問答',JSON.stringify(step.similar_pairs,null,2));}
+      if(step.ddl!==undefined){appendThought('相關 DDL',step.ddl||'');}
+      if(step.docs!==undefined){appendThought('相關文檔',step.docs||'');}
+    }else if(t==='prompt'){
+      if(step.target==='sql') appendThought('SQL 提示詞',step.content||'');
+      if(step.target==='analysis') appendThought('分析提示詞',step.content||'');
+      if(step.target==='rewrite') appendThought('自動改寫提示',step.content||'');
+    }else if(t==='llm'){
+      if(step.target==='sql') appendThought('模型產生的 SQL',step.content||'');
+      if(step.target==='analysis') appendThought('模型產生的分析',step.content||'');
+      if(step.target==='rewrite_sql') appendThought('自動改寫後 SQL',step.content||'');
+    }else if(t==='thinking_step'){
+      appendThought(`思考步驟 - ${step.step}`,step.details||'');
+    }else if(t==='warning'||t==='error'){
+      appendThought(`[${t}]`,step.message||'');
+    }else if(t==='result'){
+      renderTable(step.rows||[]);
+      if(step.analysis_result) {
+        appendThought('SQL 查詢思考過程分析表', step.analysis_result);
+      }
+    }else if(t==='done'){
+      appendThought('完成',step.success?'✅ 成功':'⚠️ 部分失敗');
+    }
+  });
+  if(data.final_sql) appendThought('最終 SQL',data.final_sql);
+  if(data.errors&&data.errors.length) appendThought('錯誤彙總',data.errors.join('\n'));
+}
+btn.addEventListener('click',ask);
+</script>
+</body></html>'''
+    from flask import make_response
+    resp = make_response(html)
+    resp.headers['Content-Type']='text/html; charset=utf-8'
+    return resp
+
+@app.get('/static/ask_sync.js')
+def ask_sync_js():
+    js = r'''(function(){
+  function qs(id){return document.getElementById(id);}    
+  function text(el){return el && ('value' in el ? el.value : el.textContent) || ''}
+  function ensurePanel(sel, fallbackId){
+    var el = document.querySelector(sel) || qs(fallbackId);
+    if(!el){
+      el = document.createElement('div');
+      el.id = fallbackId;
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  function appendBlock(panel, title, content){
+    var box=document.createElement('div');
+    box.style.border='1px solid #ddd'; box.style.padding='8px'; box.style.margin='6px 0'; box.style.borderRadius='4px';
+    var h=document.createElement('div'); h.style.fontWeight='bold'; h.style.marginBottom='4px'; h.textContent=title;
+    var pre=document.createElement('pre'); pre.style.whiteSpace='pre-wrap'; pre.textContent=content||'';
+    box.appendChild(h); box.appendChild(pre); panel.appendChild(box);
+  }
+  function renderTable(panel, rows){
+    if(!rows||!rows.length){ panel.innerHTML='<p>（空結果）</p>'; return; }
+    var cols = Object.keys(rows[0]);
+    var table=document.createElement('table'); table.style.borderCollapse='collapse'; table.style.width='100%';
+    var thead=document.createElement('thead'); var tr=document.createElement('tr');
+    cols.forEach(function(c){ var th=document.createElement('th'); th.textContent=c; th.style.border='1px solid #ccc'; th.style.padding='4px 6px'; tr.appendChild(th);});
+    thead.appendChild(tr); table.appendChild(thead);
+    var tbody=document.createElement('tbody');
+    rows.forEach(function(r){ var tr=document.createElement('tr'); cols.forEach(function(c){ var td=document.createElement('td'); td.textContent = (r[c]===undefined||r[c]===null)?'':r[c]; td.style.border='1px solid #ccc'; td.style.padding='4px 6px'; tr.appendChild(td);}); tbody.appendChild(tr); });
+    table.appendChild(tbody); panel.innerHTML=''; panel.appendChild(table);
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    var btn = document.querySelector('#ask-button');
+    if(!btn) return;
+
+    btn.addEventListener('click', async function(){
+      // 允許從 data-* 指定 selector，否則使用預設 id
+      var qSel = btn.dataset.questionSelector || '#question';
+      var dsSel = btn.dataset.datasetSelector  || '#dataset_id';
+      var uSel  = btn.dataset.userSelector     || '#user_id';
+      var spSel = btn.dataset.sqliteSelector   || '#sqlite_path';
+      var thinkSel = btn.dataset.thinkingSelector || '#thinkingPanel';
+      var resultSel = btn.dataset.resultSelector   || '#resultPanel';
+
+      var qEl = document.querySelector(qSel) || qs('question');
+      var dsEl= document.querySelector(dsSel) || qs('dataset_id');
+      var uEl = document.querySelector(uSel)  || qs('user_id');
+      var spEl= document.querySelector(spSel) || qs('sqlite_path');
+
+      var thinkingPanel = ensurePanel(thinkSel, 'thinkingPanel');
+      var resultPanel   = ensurePanel(resultSel, 'resultPanel');
+      thinkingPanel.innerHTML=''; resultPanel.innerHTML='';
+
+      appendBlock(thinkingPanel, '狀態', '⏳ 正在思考...');
+
+      var body = {
+        user_id:  uEl ? text(uEl) : 'anon',
+        dataset_id: dsEl ? text(dsEl) : '',
+        sqlite_path: spEl ? text(spEl) : '',
+        question: qEl ? text(qEl) : '',
+        sync: true
+      };
+
+      try{
+        var res = await fetch('/api/ask?mode=sync', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+        var data = await res.json();
+        thinkingPanel.innerHTML='';
+        if(!data.success && !data.steps){ appendBlock(thinkingPanel, '錯誤', (data.errors && data.errors.join('\n')) || '未知錯誤'); return; }
+        (data.steps||[]).forEach(function(step){
+          var t = step.type;
+          if(t==='schema'){
+            appendBlock(thinkingPanel, 'Schema 表清單', (step.tables||[]).join('\n'));
+          }else if(t==='retrieval'){
+            if(step.similar_pairs){ appendBlock(thinkingPanel, '相似問答', JSON.stringify(step.similar_pairs,null,2)); }
+            if(step.ddl!==undefined){ appendBlock(thinkingPanel, '相關 DDL', step.ddl||''); }
+            if(step.docs!==undefined){ appendBlock(thinkingPanel, '相關文檔', step.docs||''); }
+          }else if(t==='prompt'){
+            if(step.target==='sql') appendBlock(thinkingPanel, 'SQL 提示詞', step.content||'');
+            if(step.target==='analysis') appendBlock(thinkingPanel, '分析提示詞', step.content||'');
+            if(step.target==='rewrite') appendBlock(thinkingPanel, '自動改寫提示', step.content||'');
+          }else if(t==='llm'){
+            if(step.target==='sql') appendBlock(thinkingPanel, '模型產生的 SQL', step.content||'');
+            if(step.target==='analysis') appendBlock(thinkingPanel, '模型產生的分析', step.content||'');
+            if(step.target==='rewrite_sql') appendBlock(thinkingPanel, '自動改寫後 SQL', step.content||'');
+          }else if(t==='thinking_step'){
+            appendBlock(thinkingPanel, '思考步驟 - '+(step.step||''), step.details||'');
+          }else if(t==='analysis_result'){ // 新增處理 analysis_result 類型
+            appendBlock(thinkingPanel, 'SQL 查詢思考過程分析表', step.analysis_result||'');
+          }else if(t==='warning' || t==='error'){
+            appendBlock(thinkingPanel, '['+t+']', step.message||'');
+          }else if(t==='result'){
+            renderTable(resultPanel, step.rows||[]);
+            if(step.analysis_result) {
+              appendBlock(document.getElementById('thinking-output'), 'SQL 查詢思考過程分析表', step.analysis_result);
+            }
+          }else if(t==='done'){
+            appendBlock(thinkingPanel, '完成', step.success ? '✅ 成功' : '⚠️ 部分失敗');
+          }
+        });
+        if(data.final_sql) appendBlock(thinkingPanel, '最終 SQL', data.final_sql);
+        if(data.errors && data.errors.length) appendBlock(thinkingPanel, '錯誤彙總', data.errors.join('\n'));
+      }catch(e){
+        thinkingPanel.innerHTML=''; appendBlock(thinkingPanel, '請求錯誤', String(e));
+      }
+    });
+  });
+})();'''
+    from flask import make_response
+    resp = make_response(js)
+    resp.headers['Content-Type'] = 'application/javascript; charset=utf-8'
+    return resp
 
 if __name__ == '__main__':
+
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     app.run(host='0.0.0.0', debug=debug_mode, port=5001)
-
-
-@app.route('/@vite/client')
-def vite_client():
-    """
-    代理 Vite 開發伺服器的 @vite/client 請求。
-    """
-    try:
-        resp = requests.get('http://localhost:5173/@vite/client')
-        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-        headers = [(name, value) for name, value in resp.raw.headers.items() if name.lower() not in excluded_headers]
-        return Response(resp.content, resp.status_code, headers)
-    except requests.exceptions.ConnectionError:
-        return "Vite development server not running", 500
-
-@app.route('/src/<path:filename>')
-def vite_src(filename):
-    """
-    代理 Vite 開發伺服器的 /src/ 請求。
-    """
-    try:
-        resp = requests.get(f'http://localhost:5173/src/{filename}')
-        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-        headers = [(name, value) for name, value in resp.raw.headers.items() if name.lower() not in excluded_headers]
-        return Response(resp.content, resp.status_code, headers)
-    except requests.exceptions.ConnectionError:
-        return "Vite development server not running", 500

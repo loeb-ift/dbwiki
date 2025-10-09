@@ -121,4 +121,9 @@ class Ollama(VannaBase):
         # 如果content不是字符串，将其转换为字符串
         content = str(content)
     
+    # 檢查 LLM 回應是否與輸入提示詞相同
+    if isinstance(prompt, list) and len(prompt) > 0 and prompt[0].get('content') == content:
+        self.log(f"Ollama Response is identical to the prompt. Returning a default message.", title="Warning")
+        return "Ollama 模型未能生成有效的分析結果，可能原因：模型能力不足、提示詞過長或內容不清晰。請嘗試更具體的提示或檢查模型配置。"
+    
     return content

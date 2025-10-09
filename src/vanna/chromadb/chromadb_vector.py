@@ -21,6 +21,7 @@ class ChromaDB_VectorStore(VannaBase):
         path = config.get("path", ".")
         self.embedding_function = config.get("embedding_function", default_ef)
         curr_client = config.get("client", "persistent")
+        client_settings = config.get("client_settings", Settings(anonymized_telemetry=False))
         collection_metadata = config.get("collection_metadata", None)
         self.n_results_sql = config.get("n_results_sql", config.get("n_results", 10))
         self.n_results_documentation = config.get("n_results_documentation", config.get("n_results", 10))
@@ -28,11 +29,11 @@ class ChromaDB_VectorStore(VannaBase):
 
         if curr_client == "persistent":
             self.chroma_client = chromadb.PersistentClient(
-                path=path, settings=Settings(anonymized_telemetry=False)
+                path=path, settings=client_settings
             )
         elif curr_client == "in-memory":
             self.chroma_client = chromadb.EphemeralClient(
-                settings=Settings(anonymized_telemetry=False)
+                settings=client_settings
             )
         elif isinstance(curr_client, chromadb.api.client.Client):
             # allow providing client directly

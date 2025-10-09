@@ -527,6 +527,8 @@ async function ask() {
     const askBtn = document.getElementById('ask-button');
     const thinkingContainer = document.getElementById('thinking-container');
     const thinkingOutput = document.getElementById('thinking-output');
+    const analysisContainer = document.getElementById('analysis-container');
+    const analysisOutput = document.getElementById('analysis-output');
     const sqlContainer = document.getElementById('sql-container');
     const sqlOutput = document.getElementById('sql-output');
     const resultContainer = document.getElementById('result-container');
@@ -536,6 +538,8 @@ async function ask() {
     askBtn.textContent = '思考中...';
     thinkingContainer.style.display = 'block';
     thinkingOutput.innerHTML = '';
+    analysisContainer.style.display = 'none';
+    analysisOutput.innerHTML = '';
     sqlContainer.style.display = 'none';
     resultContainer.style.display = 'none';
     sqlOutput.textContent = '';
@@ -582,24 +586,32 @@ async function ask() {
                                 detailsPre.style.marginTop = '5px';
                                 detailsPre.style.paddingLeft = '15px';
                                 detailsPre.style.borderLeft = '2px solid #555';
-                                detailsPre.textContent = data.details;
+                                detailsPre.textContent = typeof data.details === 'object' ? JSON.stringify(data.details, null, 2) : data.details;
                                 stepElement.appendChild(detailsPre);
                             }
                             
                             thinkingOutput.appendChild(stepElement);
                             thinkingOutput.scrollTop = thinkingOutput.scrollHeight;
-                        } else if (data.type === 'sql_result') {
-                            lastGeneratedSql = data.sql;
-                            sqlOutput.textContent = lastGeneratedSql;
-                            sqlContainer.style.display = 'block';
-                        } else if (data.type === 'analysis_result') {
-                            console.log('Received analysis_result:', data.analysis);
-                            document.getElementById('analysis-output').textContent = data.analysis;
-                            document.getElementById('analysis-container').style.display = 'block';
-                            console.log('analysis-container display:', document.getElementById('analysis-container').style.display);
-                        } else if (data.type === 'data_result') {
-                            resultOutput.textContent = data.data;
-                            resultContainer.style.display = 'block';
+                        } else if (data.type === 'result') {
+                            if (data.sql) {
+                                lastGeneratedSql = data.sql;
+                                sqlOutput.textContent = lastGeneratedSql;
+                                sqlContainer.style.display = 'block';
+                            }
+                            if (data.df_json) {
+                                try {
+                                    const df = JSON.parse(data.df_json);
+                                    renderResultTable(df);
+                                    resultContainer.style.display = 'block';
+                                } catch (e) {
+                                    resultOutput.textContent = "無法解析查詢結果。";
+                                    resultContainer.style.display = 'block';
+                                }
+                            }
+                            if (data.analysis_result) {
+                                analysisOutput.innerHTML = marked.parse(data.analysis_result);
+                                analysisContainer.style.display = 'block';
+                            }
                         } else if (data.type === 'error') {
                             throw new Error(data.message);
                         }
@@ -620,6 +632,41 @@ async function ask() {
         askBtn.disabled = false;
         askBtn.textContent = '提出問題';
     }
+}
+
+function renderResultTable(data) {
+    const container = document.getElementById('result-output');
+    container.innerHTML = '';
+    if (!data || data.length === 0) {
+        container.textContent = '（查詢結果為空）';
+        return;
+    }
+
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const tbody = document.createElement('tbody');
+    
+    const headerRow = document.createElement('tr');
+    Object.keys(data[0]).forEach(key => {
+        const th = document.createElement('th');
+        th.textContent = key;
+        headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+
+    data.forEach(rowData => {
+        const row = document.createElement('tr');
+        Object.values(rowData).forEach(value => {
+            const td = document.createElement('td');
+            td.textContent = value;
+            row.appendChild(td);
+        });
+        tbody.appendChild(row);
+    });
+
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    container.appendChild(table);
 }
 
 // --- Generate QA from SQL File ---

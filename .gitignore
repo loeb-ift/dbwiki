@@ -13,11 +13,16 @@ docs/*.html
 notebooks/chroma.sqlite3
 dist
 .env
-*.sqlite
-!user_data/*.sqlite
 htmlcov
 chroma.sqlite3
 *.bin
 .coverage.*
 milvus.db
 .milvus.db.lock
+
+
+# User Data and Logs
+/user_data/
+/temp_vanna_data/
+/ask_log/
+/prompt_history/
