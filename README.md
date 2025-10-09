@@ -20,36 +20,58 @@
 pip install -r requirements.txt
 ```
 
-### 2. 設定 Ollama 連線
+### 2. 設定 LLM 連線
 
-本專案使用 Ollama 來驅動大型語言模型。請確保您已經在您的伺服器上安裝並執行了 Ollama。
+本專案支援多種大型語言模型 (LLM)，包括本地端的 Ollama，以及雲端的 OpenAI、Anthropic (Claude) 和 Google (Gemini)。
 
-接著，複製 `.env.example` 檔案，並將其重新命名為 `.env`：
+首先，複製 `.env.example` 檔案，並將其重新命名為 `.env`：
 
 ```bash
 cp .env.example .env
 ```
 
-然後，編輯 `.env` 檔案，填入您的 Ollama 伺服器位址和要使用的模型名稱：
+接著，編輯 `.env` 檔案，**選擇其中一種** LLM 供應商，並填入對應的設定。程式會自動偵測您填寫的是哪一種。
 
+**範例 1：使用本地端的 Ollama**
 ```
-# Ollama API 客戶端
+# --- LLM Configuration ---
+# 1. Ollama (Local LLM)
 OLLAMA_HOST=http://your-ollama-server-ip:11434
 OLLAMA_MODEL=your-model-name:latest
-
-# ... 其他設定 ...
 ```
 
-- `OLLAMA_HOST`：您的 Ollama 伺服器的 IP 位址和埠號。
-- `OLLAMA_MODEL`：您希望使用的模型名稱，例如 `mistral:latest` 或 `llama3:latest`。
-- `APP_USERS`：設定應用程式的使用者帳號與密碼，請使用 JSON 格式。例如：`{"user1": "pass1", "admin": "secret_password"}`。
+**範例 2：使用 OpenAI**
+```
+# --- LLM Configuration ---
+# 2. OpenAI
+OPENAI_API_KEY="sk-..."
+OPENAI_MODEL="gpt-4-turbo"
+```
+
+**範例 3：使用 Anthropic (Claude)**
+```
+# --- LLM Configuration ---
+# 3. Anthropic (Claude)
+ANTHROPIC_API_KEY="sk-ant-..."
+ANTHROPIC_MODEL="claude-3-opus-20240229"
+```
+
+**範例 4：使用 Google (Gemini)**
+```
+# --- LLM Configuration ---
+# 4. Google (Gemini)
+GOOGLE_API_KEY="..."
+GOOGLE_MODEL="gemini-1.5-pro-latest"
+```
+
+**重要**：請確保一次只啟用一種 LLM 的設定，將其他供應商的設定保持註解狀態。
 
 ## 啟動應用程式
 
 完成環境設定後，您可以透過以下指令來啟動 Flask 網頁應用程式：
 
 ```bash
-python multi_user_app.py
+python app.py
 ```
 
 應用程式預設會在 `0.0.0.0:5001` 上執行。您可以在瀏覽器中開啟 `http://localhost:5001` 來存取網頁介面。

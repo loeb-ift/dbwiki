@@ -34,6 +34,9 @@ def load_prompt_template(filename):
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
 
 from vanna.ollama import Ollama
+from vanna.openai import OpenAI_Chat
+from vanna.anthropic import Anthropic_Chat
+from vanna.google import Gemini_Chat
 from vanna.chromadb import ChromaDB_VectorStore
 from vanna.types import TrainingPlan
 
@@ -43,7 +46,12 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', str(uuid.uuid4()))
 
 # --- User Management ---
-users = {"user1": "pass1", "user2": "pass2"}
+try:
+    users_json = os.getenv('APP_USERS', '{"user1": "pass1", "user2": "pass2"}')
+    users = json.loads(users_json)
+except json.JSONDecodeError:
+    app.logger.error("APP_USERS 環境變數格式錯誤，請使用正確的 JSON 格式。")
+    users = {}
 
 # Helper function to write logs to file
 def write_ask_log(user_id: str, log_type: str, content: str):
@@ -142,18 +150,42 @@ def init_training_db(user_id: str):
         raise
 
 # --- Vanna AI Integration ---
-class MyVanna(Ollama, ChromaDB_VectorStore):
+class MyVanna(ChromaDB_VectorStore):
     def __init__(self, user_id: str, config=None):
         app.logger.info(f"Initializing MyVanna instance for user: {user_id}")
         self.log_queue = Queue()
-        self.user_id = user_id  # Store user_id as an instance attribute
-        model = os.getenv('OLLAMA_MODEL')
-        if not model: raise ValueError("OLLAMA_MODEL not set.")
-        ollama_host = os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434')
+        self.user_id = user_id
+
+        # Determine which LLM to use based on environment variables
+        llm_choice = self._get_llm_choice()
         
-        app.logger.info(f"Initializing Ollama for user: {user_id} with model: {model}, host: {ollama_host}")
-        Ollama.__init__(self, config={'model': model, 'ollama_host': ollama_host})
-        
+        if llm_choice == 'ollama':
+            model = os.getenv('OLLAMA_MODEL')
+            if not model: raise ValueError("OLLAMA_MODEL not set.")
+            ollama_host = os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434')
+            app.logger.info(f"Initializing Ollama for user: {user_id} with model: {model}, host: {ollama_host}")
+            Ollama.__init__(self, config={'model': model, 'ollama_host': ollama_host})
+        elif llm_choice == 'openai':
+            api_key = os.getenv('OPENAI_API_KEY')
+            model = os.getenv('OPENAI_MODEL', 'gpt-4-turbo')
+            if not api_key: raise ValueError("OPENAI_API_KEY not set.")
+            app.logger.info(f"Initializing OpenAI for user: {user_id} with model: {model}")
+            OpenAI_Chat.__init__(self, config={'api_key': api_key, 'model': model})
+        elif llm_choice == 'anthropic':
+            api_key = os.getenv('ANTHROPIC_API_KEY')
+            model = os.getenv('ANTHROPIC_MODEL', 'claude-3-opus-20240229')
+            if not api_key: raise ValueError("ANTHROPIC_API_KEY not set.")
+            app.logger.info(f"Initializing Anthropic for user: {user_id} with model: {model}")
+            Anthropic_Chat.__init__(self, config={'api_key': api_key, 'model': model})
+        elif llm_choice == 'google':
+            api_key = os.getenv('GOOGLE_API_KEY')
+            model = os.getenv('GOOGLE_MODEL', 'gemini-1.5-pro-latest')
+            if not api_key: raise ValueError("GOOGLE_API_KEY not set.")
+            app.logger.info(f"Initializing Google Gemini for user: {user_id} with model: {model}")
+            Gemini_Chat.__init__(self, config={'api_key': api_key, 'model': model})
+        else:
+            raise ValueError("No valid LLM configuration found in environment variables.")
+
         collection_name = f"vanna_training_data_{user_id}"
         app.logger.info(f"Initializing ChromaDB_VectorStore for user: {user_id} with collection: {collection_name}")
         ChromaDB_VectorStore.__init__(self, config={'collection_name': collection_name})
@@ -209,6 +241,17 @@ class MyVanna(Ollama, ChromaDB_VectorStore):
         sql_response = self._original_generate_sql(question, **kwargs)
         self.log_queue.put({'type': 'thinking_step', 'step': 'LLM 完成生成 SQL', 'details': {'sql_response': sql_response}})
         return sql_response
+
+    def _get_llm_choice(self):
+        if os.getenv('OLLAMA_MODEL'):
+            return 'ollama'
+        if os.getenv('OPENAI_API_KEY'):
+            return 'openai'
+        if os.getenv('ANTHROPIC_API_KEY'):
+            return 'anthropic'
+        if os.getenv('GOOGLE_API_KEY'):
+            return 'google'
+        return None
 
     def log(self, message: str, title: str = "資訊"):
         self.log_queue.put({'type': 'thinking_step', 'step': title, 'details': {'message': message}})
@@ -640,8 +683,12 @@ def ask_question():
             try:
                 df = vn.run_sql(sql=sql)
             except OperationalError as e:
-                app.logger.error(f"SQL execution failed: {e}", exc_info=True)
-                vn.log(f"SQL 執行失敗: {e}", "錯誤")
+                if "no such table" in str(e):
+                    app.logger.warning(f"SQL execution skipped, table not found: {e}")
+                    vn.log(f"SQL 執行被跳過，因為找不到資料表。", "警告")
+                else:
+                    app.logger.error(f"SQL execution failed: {e}", exc_info=True)
+                    vn.log(f"SQL 執行失敗: {e}", "錯誤")
                 df = pd.DataFrame() # 建立一個空的 DataFrame，讓後續流程可以繼續
         
             # correct_sql = None # Commented out as correct_sql is not implemented
@@ -1013,225 +1060,6 @@ def delete_all_qa():
         app.logger.error(f"Database error for user '{user_id}' in delete_all_qa: {e}")
         return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
 
-@app.get('/ask/ui-sync')
-def ask_ui_sync():
-    html = '''<!doctype html>
-<html><head><meta charset="utf-8"><title>Ask Sync UI</title>
-<style>
-  body{font-family:Arial,Helvetica,sans-serif;margin:16px}
-  .row{margin:6px 0}
-  .thought-block{border:1px solid #ddd;padding:8px;margin:6px 0;border-radius:4px}
-  .thought-title{font-weight:bold;margin-bottom:4px}
-  .table{border-collapse:collapse;width:100%}
-  .table th,.table td{border:1px solid #ccc;padding:4px 6px}
-</style>
-</head>
-<body>
-  <h2>/api/ask 同步模式（顯示思考過程）</h2>
-  <div class="row">
-    <label>使用者：<input id="user_id" value="alice"></label>
-    <label>資料集ID：<input id="dataset_id" value="supermarket"></label>
-    <label>SQLite（可選）：<input id="sqlite_path" style="width:320px" placeholder="/path/to.db"></label>
-  </div>
-  <div class="row">
-    <label style="display:inline-block;width:90%">問題：<input id="question" style="width:90%" placeholder="請輸入您的問題"></label>
-    <button id="askBtn">送出</button>
-  </div>
-  <h3>思考過程</h3>
-  <div id="thinkingPanel"></div>
-  <h3>結果</h3>
-  <div id="resultPanel"></div>
-
-<script>
-const thinkingPanel = document.getElementById('thinkingPanel');
-const resultPanel = document.getElementById('resultPanel');
-const userEl = document.getElementById('user_id');
-const dsEl = document.getElementById('dataset_id');
-const spEl = document.getElementById('sqlite_path');
-const qEl = document.getElementById('question');
-const btn = document.getElementById('askBtn');
-
-function appendThought(title, content){
-  const box=document.createElement('div');
-  box.className='thought-block';
-  box.innerHTML=`<div class="thought-title">${title}</div><pre style="white-space:pre-wrap">${content||''}</pre>`;
-  thinkingPanel.appendChild(box);
-}
-function renderTable(rows){
-  if(!rows||rows.length===0){resultPanel.innerHTML='<p>（空結果）</p>';return;}
-  const cols=Object.keys(rows[0]);
-  let html='<table class="table"><thead><tr>';
-  cols.forEach(c=>html+=`<th>${c}</th>`);
-  html+='</tr></thead><tbody>';
-  rows.forEach(r=>{html+='<tr>'+cols.map(c=>`<td>${r[c]??''}</td>`).join('')+'</tr>';});
-  html+='</tbody></table>';
-  resultPanel.innerHTML=html;
-}
-async function ask(){
-  thinkingPanel.innerHTML='';
-  resultPanel.innerHTML='';
-  appendThought('狀態','⏳ 正在思考...');
-  const body={user_id:userEl.value,dataset_id:dsEl.value,sqlite_path:spEl.value,question:qEl.value,sync:true};
-  const res=await fetch('/api/ask?mode=sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const data=await res.json();
-  thinkingPanel.innerHTML='';
-  if(!data.success && !data.steps){
-    appendThought('錯誤',(data.errors&&data.errors.join('\n'))||'未知錯誤');
-    return;
-  }
-  (data.steps||[]).forEach(step=>{
-    const t=step.type;
-    if(t==='schema'){
-      appendThought('Schema 表清單',(step.tables||[]).join('\n'));
-    }else if(t==='retrieval'){
-      if(step.similar_pairs){appendThought('相似問答',JSON.stringify(step.similar_pairs,null,2));}
-      if(step.ddl!==undefined){appendThought('相關 DDL',step.ddl||'');}
-      if(step.docs!==undefined){appendThought('相關文檔',step.docs||'');}
-    }else if(t==='prompt'){
-      if(step.target==='sql') appendThought('SQL 提示詞',step.content||'');
-      if(step.target==='analysis') appendThought('分析提示詞',step.content||'');
-      if(step.target==='rewrite') appendThought('自動改寫提示',step.content||'');
-    }else if(t==='llm'){
-      if(step.target==='sql') appendThought('模型產生的 SQL',step.content||'');
-      if(step.target==='analysis') appendThought('模型產生的分析',step.content||'');
-      if(step.target==='rewrite_sql') appendThought('自動改寫後 SQL',step.content||'');
-    }else if(t==='thinking_step'){
-      appendThought(`思考步驟 - ${step.step}`,step.details||'');
-    }else if(t==='warning'||t==='error'){
-      appendThought(`[${t}]`,step.message||'');
-    }else if(t==='result'){
-      renderTable(step.rows||[]);
-      if(step.analysis_result) {
-        appendThought('SQL 查詢思考過程分析表', step.analysis_result);
-      }
-    }else if(t==='done'){
-      appendThought('完成',step.success?'✅ 成功':'⚠️ 部分失敗');
-    }
-  });
-  if(data.final_sql) appendThought('最終 SQL',data.final_sql);
-  if(data.errors&&data.errors.length) appendThought('錯誤彙總',data.errors.join('\n'));
-}
-btn.addEventListener('click',ask);
-</script>
-</body></html>'''
-    from flask import make_response
-    resp = make_response(html)
-    resp.headers['Content-Type']='text/html; charset=utf-8'
-    return resp
-
-@app.get('/static/ask_sync.js')
-def ask_sync_js():
-    js = r'''(function(){
-  function qs(id){return document.getElementById(id);}    
-  function text(el){return el && ('value' in el ? el.value : el.textContent) || ''}
-  function ensurePanel(sel, fallbackId){
-    var el = document.querySelector(sel) || qs(fallbackId);
-    if(!el){
-      el = document.createElement('div');
-      el.id = fallbackId;
-      document.body.appendChild(el);
-    }
-    return el;
-  }
-  function appendBlock(panel, title, content){
-    var box=document.createElement('div');
-    box.style.border='1px solid #ddd'; box.style.padding='8px'; box.style.margin='6px 0'; box.style.borderRadius='4px';
-    var h=document.createElement('div'); h.style.fontWeight='bold'; h.style.marginBottom='4px'; h.textContent=title;
-    var pre=document.createElement('pre'); pre.style.whiteSpace='pre-wrap'; pre.textContent=content||'';
-    box.appendChild(h); box.appendChild(pre); panel.appendChild(box);
-  }
-  function renderTable(panel, rows){
-    if(!rows||!rows.length){ panel.innerHTML='<p>（空結果）</p>'; return; }
-    var cols = Object.keys(rows[0]);
-    var table=document.createElement('table'); table.style.borderCollapse='collapse'; table.style.width='100%';
-    var thead=document.createElement('thead'); var tr=document.createElement('tr');
-    cols.forEach(function(c){ var th=document.createElement('th'); th.textContent=c; th.style.border='1px solid #ccc'; th.style.padding='4px 6px'; tr.appendChild(th);});
-    thead.appendChild(tr); table.appendChild(thead);
-    var tbody=document.createElement('tbody');
-    rows.forEach(function(r){ var tr=document.createElement('tr'); cols.forEach(function(c){ var td=document.createElement('td'); td.textContent = (r[c]===undefined||r[c]===null)?'':r[c]; td.style.border='1px solid #ccc'; td.style.padding='4px 6px'; tr.appendChild(td);}); tbody.appendChild(tr); });
-    table.appendChild(tbody); panel.innerHTML=''; panel.appendChild(table);
-  }
-
-  document.addEventListener('DOMContentLoaded', function(){
-    var btn = document.querySelector('#ask-button');
-    if(!btn) return;
-
-    btn.addEventListener('click', async function(){
-      // 允許從 data-* 指定 selector，否則使用預設 id
-      var qSel = btn.dataset.questionSelector || '#question';
-      var dsSel = btn.dataset.datasetSelector  || '#dataset_id';
-      var uSel  = btn.dataset.userSelector     || '#user_id';
-      var spSel = btn.dataset.sqliteSelector   || '#sqlite_path';
-      var thinkSel = btn.dataset.thinkingSelector || '#thinkingPanel';
-      var resultSel = btn.dataset.resultSelector   || '#resultPanel';
-
-      var qEl = document.querySelector(qSel) || qs('question');
-      var dsEl= document.querySelector(dsSel) || qs('dataset_id');
-      var uEl = document.querySelector(uSel)  || qs('user_id');
-      var spEl= document.querySelector(spSel) || qs('sqlite_path');
-
-      var thinkingPanel = ensurePanel(thinkSel, 'thinkingPanel');
-      var resultPanel   = ensurePanel(resultSel, 'resultPanel');
-      thinkingPanel.innerHTML=''; resultPanel.innerHTML='';
-
-      appendBlock(thinkingPanel, '狀態', '⏳ 正在思考...');
-
-      var body = {
-        user_id:  uEl ? text(uEl) : 'anon',
-        dataset_id: dsEl ? text(dsEl) : '',
-        sqlite_path: spEl ? text(spEl) : '',
-        question: qEl ? text(qEl) : '',
-        sync: true
-      };
-
-      try{
-        var res = await fetch('/api/ask?mode=sync', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-        var data = await res.json();
-        thinkingPanel.innerHTML='';
-        if(!data.success && !data.steps){ appendBlock(thinkingPanel, '錯誤', (data.errors && data.errors.join('\n')) || '未知錯誤'); return; }
-        (data.steps||[]).forEach(function(step){
-          var t = step.type;
-          if(t==='schema'){
-            appendBlock(thinkingPanel, 'Schema 表清單', (step.tables||[]).join('\n'));
-          }else if(t==='retrieval'){
-            if(step.similar_pairs){ appendBlock(thinkingPanel, '相似問答', JSON.stringify(step.similar_pairs,null,2)); }
-            if(step.ddl!==undefined){ appendBlock(thinkingPanel, '相關 DDL', step.ddl||''); }
-            if(step.docs!==undefined){ appendBlock(thinkingPanel, '相關文檔', step.docs||''); }
-          }else if(t==='prompt'){
-            if(step.target==='sql') appendBlock(thinkingPanel, 'SQL 提示詞', step.content||'');
-            if(step.target==='analysis') appendBlock(thinkingPanel, '分析提示詞', step.content||'');
-            if(step.target==='rewrite') appendBlock(thinkingPanel, '自動改寫提示', step.content||'');
-          }else if(t==='llm'){
-            if(step.target==='sql') appendBlock(thinkingPanel, '模型產生的 SQL', step.content||'');
-            if(step.target==='analysis') appendBlock(thinkingPanel, '模型產生的分析', step.content||'');
-            if(step.target==='rewrite_sql') appendBlock(thinkingPanel, '自動改寫後 SQL', step.content||'');
-          }else if(t==='thinking_step'){
-            appendBlock(thinkingPanel, '思考步驟 - '+(step.step||''), step.details||'');
-          }else if(t==='analysis_result'){ // 新增處理 analysis_result 類型
-            appendBlock(thinkingPanel, 'SQL 查詢思考過程分析表', step.analysis_result||'');
-          }else if(t==='warning' || t==='error'){
-            appendBlock(thinkingPanel, '['+t+']', step.message||'');
-          }else if(t==='result'){
-            renderTable(resultPanel, step.rows||[]);
-            if(step.analysis_result) {
-              appendBlock(document.getElementById('thinking-output'), 'SQL 查詢思考過程分析表', step.analysis_result);
-            }
-          }else if(t==='done'){
-            appendBlock(thinkingPanel, '完成', step.success ? '✅ 成功' : '⚠️ 部分失敗');
-          }
-        });
-        if(data.final_sql) appendBlock(thinkingPanel, '最終 SQL', data.final_sql);
-        if(data.errors && data.errors.length) appendBlock(thinkingPanel, '錯誤彙總', data.errors.join('\n'));
-      }catch(e){
-        thinkingPanel.innerHTML=''; appendBlock(thinkingPanel, '請求錯誤', String(e));
-      }
-    });
-  });
-})();'''
-    from flask import make_response
-    resp = make_response(js)
-    resp.headers['Content-Type'] = 'application/javascript; charset=utf-8'
-    return resp
 
 if __name__ == '__main__':
 
