@@ -448,6 +448,8 @@ class MyVanna(ChromaDB_VectorStore):
 
     def generate_sql(self, question: str, **kwargs):
         self.log_queue.put({'type': 'thinking_step', 'step': 'LLM 開始生成 SQL', 'details': {'question': question}})
+        # 确保_original_generate_sql已初始化
+        self._get_original_generate_sql()
         sql_response = self._original_generate_sql(question, **kwargs)
         self.log_queue.put({'type': 'thinking_step', 'step': 'LLM 完成生成 SQL', 'details': {'sql_response': sql_response}})
         return sql_response
@@ -1031,7 +1033,13 @@ def ask_question():
                 app.logger.error(f"Error loading training data from temporary file in ask function: {e}")
                 vn.log(f"從暫存文件加載訓練數據時出錯: {e}", "錯誤")
 
-            # 現在所有操作都將使用同一個 vn 實例及其 log_queue
+            # 现在所有操作都将使用同一個 vn 實例及其 log_queue
+            # 先获取相似问题、相关DDL和文档信息，确保这些信息被记录到日志中
+            similar_qa = vn.get_similar_question_sql(question=question)
+            related_ddl = vn.get_related_ddl(question=question)
+            related_docs = vn.get_related_documentation(question=question)
+            
+            # 然后再生成SQL
             sql = vn.generate_sql(question=question)
 
             # 檢查並修正不完整的 WITH 語句
@@ -1497,10 +1505,21 @@ def delete_prompt(prompt_id):
     try:
         with get_user_db_connection(user_id) as conn:
             cursor = conn.cursor()
+            
+            # 先检查提示词是否为全局提示词
+            cursor.execute("SELECT is_global FROM training_prompts WHERE id = ?", (prompt_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                return jsonify({'status': 'error', 'message': '提示詞不存在。'}), 404
+            
+            if result[0] == 1:
+                return jsonify({'status': 'error', 'message': '無法刪除全局提示詞。'}), 403
+            
+            # 删除非全局提示词
             cursor.execute("DELETE FROM training_prompts WHERE id = ?", (prompt_id,))
             conn.commit()
-            if cursor.rowcount == 0:
-                return jsonify({'status': 'error', 'message': '提示詞不存在。'}), 404
+            
             return jsonify({'status': 'success', 'message': '提示詞已刪除。'})
     except sqlite3.Error as e:
         app.logger.error(f"Database error for user '{user_id}' in delete_prompt: {e}")
