@@ -15,7 +15,7 @@ ollama
 chromadb
 langchain
 langchain-community
-
+vertexai
 # Knowledge Graph
 
 

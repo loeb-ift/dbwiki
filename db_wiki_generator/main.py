@@ -69,8 +69,14 @@ def run_schema_extraction(dialect: str, connection_details: dict):
         
         # Print the enriched schema in a readable format
         print("\n--- Enriched Schema (Knowledge Base) ---")
-        print(json.dumps(enriched_schema_data, indent=2))
+        print(json.dumps(enriched_schema_data, indent=2, ensure_ascii=False))
         print("------------------------------------------")
+
+        # Save the enriched schema to a file for persistence
+        output_path = "knowledge_base.json"
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(enriched_schema_data, f, indent=2, ensure_ascii=False)
+        print(f"Enriched schema has been saved to '{output_path}'.")
         
     except (ValueError, ConnectionError, NotImplementedError) as e:
         print(f"An error occurred: {e}")

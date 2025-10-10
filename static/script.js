@@ -29,10 +29,24 @@ async function loadDatasets() {
         selector.innerHTML = '<option value="">請選擇一個資料集...</option>';
         if (result.datasets && Array.isArray(result.datasets)) {
             result.datasets.forEach(ds => {
-                const option = new Option(`${ds.dataset_name} (${new Date(ds.created_at).toLocaleDateString()})`, ds.id);
+                const option = new Option(`${ds.name || ds.dataset_name} (${new Date(ds.created_at).toLocaleDateString()})`, ds.id);
                 selector.add(option);
             });
         }
+        // 监听数据集选择变化，启用/禁用编辑和删除按钮
+        selector.onchange = function() {
+            const editBtn = document.getElementById('edit-dataset-btn');
+            const deleteBtn = document.getElementById('delete-dataset-btn');
+            if (this.value) {
+                editBtn.disabled = false;
+                deleteBtn.disabled = false;
+                activateDataset(this.value);
+            } else {
+                editBtn.disabled = true;
+                deleteBtn.disabled = true;
+                activateDataset(null);
+            }
+        };
     } catch (error) {
         console.error('加載資料集失敗:', error);
     }
@@ -41,6 +55,7 @@ async function loadDatasets() {
 async function activateDataset(datasetId) {
     document.getElementById('training-section').style.display = 'none';
     document.getElementById('ask-section').style.display = 'none';
+    document.getElementById('prompts-section').style.display = 'none';
     activeDatasetId = null;
     fullDdlMap = {};
     tableNames = [];
@@ -67,10 +82,14 @@ async function activateDataset(datasetId) {
         }, {});
         
         document.getElementById('training-section').style.display = 'block';
+        document.getElementById('prompts-section').style.display = 'block';
         
         if (result.is_trained) {
             document.getElementById('ask-section').style.display = 'block';
         }
+        
+        // 加载提示词列表
+        await loadPrompts();
         
         populateTableSelector();
         await loadTrainingDataForTable('global');
@@ -482,21 +501,344 @@ async function handleNewDatasetSubmit(event) {
     }
 }
 
-// --- Event Listeners ---
-function setupEventListeners() {
-    const datasetSelector = document.getElementById('dataset-selector');
-    if (datasetSelector) {
-        datasetSelector.addEventListener('change', (e) => activateDataset(e.target.value));
+// 打开编辑数据集模态框
+function openEditDatasetModal() {
+    const modal = document.getElementById('edit-dataset-modal');
+    const selector = document.getElementById('dataset-selector');
+    const selectedOption = selector.options[selector.selectedIndex];
+    const datasetName = selectedOption.text.split(' (')[0]; // 获取数据集名称，去除日期部分
+    const datasetId = selector.value;
+    
+    document.getElementById('edit-dataset-id').value = datasetId;
+    document.getElementById('edit-dataset-name').value = datasetName;
+    modal.style.display = 'flex';
+    
+    // 加载当前数据集中的CSV文件列表
+    loadDatasetFiles(datasetId);
+    
+    // 设置添加文件按钮的点击事件
+    document.getElementById('add-file-btn').onclick = async function() {
+        await handleAddDatasetFile(datasetId);
+    };
+}
+
+// 关闭编辑数据集模态框
+function closeEditDatasetModal() {
+    const modal = document.getElementById('edit-dataset-modal');
+    modal.style.display = 'none';
+    
+    // 清空文件列表
+    document.getElementById('current-files-list').innerHTML = '';
+}
+
+// 加载数据集中的文件列表
+async function loadDatasetFiles(datasetId) {
+    const filesListContainer = document.getElementById('current-files-list');
+    filesListContainer.innerHTML = '<p>正在加载文件列表...</p>';
+    
+    try {
+        const response = await apiFetch(`/api/datasets/${datasetId}/tables`);
+        const tables = response.table_names || [];
+        
+        if (tables.length === 0) {
+            filesListContainer.innerHTML = '<p>資料集中沒有任何文件。</p>';
+        } else {
+            filesListContainer.innerHTML = '';
+            tables.forEach(tableName => {
+                const fileItem = document.createElement('div');
+                fileItem.style.display = 'flex';
+                fileItem.style.justifyContent = 'space-between';
+                fileItem.style.alignItems = 'center';
+                fileItem.style.padding = '5px 0';
+                fileItem.style.borderBottom = '1px solid #eee';
+                
+                const fileNameSpan = document.createElement('span');
+                fileNameSpan.textContent = tableName + '.csv';
+                
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = '移除';
+                deleteBtn.style.padding = '3px 8px';
+                deleteBtn.style.fontSize = '0.8em';
+                deleteBtn.style.backgroundColor = '#dc3545';
+                deleteBtn.onclick = async function() {
+                    await handleRemoveDatasetFile(datasetId, tableName);
+                };
+                
+                fileItem.appendChild(fileNameSpan);
+                fileItem.appendChild(deleteBtn);
+                filesListContainer.appendChild(fileItem);
+            });
+        }
+    } catch (error) {
+        console.error('加載資料集文件列表失敗:', error);
+        filesListContainer.innerHTML = `<p style="color: red;">加載文件列表失敗: ${error.message}</p>`;
+    }
+}
+
+// 添加文件到数据集
+async function handleAddDatasetFile(datasetId) {
+    const fileInput = document.getElementById('edit-dataset-files');
+    const files = fileInput.files;
+    
+    if (files.length === 0) {
+        alert('請先選擇要添加的 CSV 檔案');
+        return;
     }
     
+    const file = files[0];
+    if (!file.name.endsWith('.csv')) {
+        alert('只支援 CSV 檔案');
+        return;
+    }
+    
+    const addBtn = document.getElementById('add-file-btn');
+    const originalText = addBtn.textContent;
+    addBtn.disabled = true;
+    addBtn.textContent = '添加中...';
+    
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        await apiFetch('/api/datasets/files', {
+            method: 'POST',
+            headers: {
+                'X-Dataset-Id': datasetId
+            },
+            body: formData
+        });
+        
+        alert(`文件 "${file.name}" 添加成功！`);
+        
+        // 清空文件输入并重新加载文件列表
+        fileInput.value = '';
+        await loadDatasetFiles(datasetId);
+        
+        // 重新加载数据集列表，以便更新相关信息
+        await loadDatasets();
+        
+        // 重新选择当前数据集
+        const selector = document.getElementById('dataset-selector');
+        selector.value = datasetId;
+        selector.dispatchEvent(new Event('change'));
+    } catch (error) {
+        console.error('添加文件失敗:', error);
+        alert(`添加文件失敗: ${error.message}`);
+    } finally {
+        addBtn.disabled = false;
+        addBtn.textContent = originalText;
+    }
+}
+
+// 从数据集移除文件
+async function handleRemoveDatasetFile(datasetId, tableName) {
+    if (!confirm(`確定要從資料集中移除 "${tableName}.csv" 嗎？`)) {
+        return;
+    }
+    
+    try {
+        await apiFetch('/api/datasets/files', {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                dataset_id: datasetId,
+                table_name: tableName
+            })
+        });
+        
+        alert(`文件 "${tableName}.csv" 移除成功！`);
+        
+        // 重新加载文件列表
+        await loadDatasetFiles(datasetId);
+        
+        // 重新加载数据集列表，以便更新相关信息
+        await loadDatasets();
+        
+        // 重新选择当前数据集
+        const selector = document.getElementById('dataset-selector');
+        selector.value = datasetId;
+        selector.dispatchEvent(new Event('change'));
+    } catch (error) {
+        console.error('移除文件失敗:', error);
+        alert(`移除文件失敗: ${error.message}`);
+    }
+}
+
+// 处理编辑数据集表单提交
+async function handleEditDatasetSubmit(event) {
+    event.preventDefault();
+    
+    const datasetId = document.getElementById('edit-dataset-id').value;
+    const datasetName = document.getElementById('edit-dataset-name').value.trim();
+    const submitBtn = document.getElementById('edit-dataset-submit-btn');
+    
+    if (!datasetName) {
+        alert('請輸入資料集名稱');
+        return;
+    }
+    
+    submitBtn.disabled = true;
+    submitBtn.textContent = '儲存中...';
+    
+    try {
+        await apiFetch(`/api/datasets`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataset_id: datasetId, new_name: datasetName })
+        });
+        
+        alert('資料集更新成功！');
+        closeEditDatasetModal();
+        await loadDatasets();
+        // 重新选择修改后的数据集
+        const selector = document.getElementById('dataset-selector');
+        selector.value = datasetId;
+        selector.dispatchEvent(new Event('change'));
+    } catch (error) {
+        console.error('更新資料集失敗:', error);
+        alert(`更新資料集失敗: ${error.message}`);
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '儲存修改';
+    }
+}
+
+// 删除数据集
+async function deleteDataset() {
+    const selector = document.getElementById('dataset-selector');
+    const datasetId = selector.value;
+    const selectedOption = selector.options[selector.selectedIndex];
+    const datasetName = selectedOption.text.split(' (')[0];
+    
+    if (!confirm(`確定要刪除資料集 "${datasetName}" 嗎？此操作無法撤銷！`)) {
+        return;
+    }
+    
+    try {
+        await apiFetch(`/api/datasets`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataset_id: datasetId })
+        });
+        
+        alert('資料集刪除成功！');
+        await loadDatasets();
+        selector.value = '';
+        selector.dispatchEvent(new Event('change'));
+    } catch (error) {
+        console.error('刪除資料集失敗:', error);
+        alert(`刪除資料集失敗: ${error.message}`);
+    }
+}
+function setupEventListeners() {
+    // 标签页切换
+    const datasetTab = document.getElementById('dataset-tab');
+    if (datasetTab) {
+        datasetTab.addEventListener('click', () => {
+            document.getElementById('dataset-section').style.display = 'block';
+            document.getElementById('training-section').style.display = 'none';
+            document.getElementById('ask-section').style.display = 'none';
+            document.getElementById('prompts-section').style.display = 'none';
+            document.getElementById('documentation-output-section').style.display = 'none';
+        });
+    }
+
+    const trainingTab = document.getElementById('training-tab');
+    if (trainingTab) {
+        trainingTab.addEventListener('click', () => {
+            document.getElementById('dataset-section').style.display = 'none';
+            document.getElementById('training-section').style.display = 'block';
+            document.getElementById('ask-section').style.display = 'none';
+            document.getElementById('prompts-section').style.display = 'none';
+            document.getElementById('documentation-output-section').style.display = 'none';
+        });
+    }
+
+    const askTab = document.getElementById('ask-tab');
+    if (askTab) {
+        askTab.addEventListener('click', () => {
+            document.getElementById('dataset-section').style.display = 'none';
+            document.getElementById('training-section').style.display = 'none';
+            document.getElementById('ask-section').style.display = 'block';
+            document.getElementById('prompts-section').style.display = 'none';
+            document.getElementById('documentation-output-section').style.display = 'none';
+        });
+    }
+
+    const promptsTab = document.getElementById('prompts-tab');
+    if (promptsTab) {
+        promptsTab.addEventListener('click', () => {
+            document.getElementById('dataset-section').style.display = 'none';
+            document.getElementById('training-section').style.display = 'none';
+            document.getElementById('ask-section').style.display = 'none';
+            document.getElementById('prompts-section').style.display = 'block';
+            document.getElementById('documentation-output-section').style.display = 'none';
+            if (activeDatasetId) {
+                loadPrompts();
+            }
+        });
+    }
+
+    const documentationTab = document.getElementById('documentation-tab');
+    if (documentationTab) {
+        documentationTab.addEventListener('click', () => {
+            document.getElementById('dataset-section').style.display = 'none';
+            document.getElementById('training-section').style.display = 'none';
+            document.getElementById('ask-section').style.display = 'none';
+            document.getElementById('prompts-section').style.display = 'none';
+            document.getElementById('documentation-output-section').style.display = 'block';
+        });
+    }
+
+    // 新增提示词按钮
+    const addPromptBtn = document.getElementById('add-prompt-btn');
+    if (addPromptBtn) {
+        addPromptBtn.addEventListener('click', openPromptModal);
+    }
+
+    // 关闭提示词模态框按钮
+    const closePromptModalBtn = document.getElementById('close-prompt-modal');
+    if (closePromptModalBtn) {
+        closePromptModalBtn.addEventListener('click', closePromptModal);
+    }
+
+    // 关闭数据集模态框按钮
+    const closeDatasetModalBtn = document.getElementById('close-dataset-modal');
+    if (closeDatasetModalBtn) {
+        closeDatasetModalBtn.addEventListener('click', closeNewDatasetModal);
+    }
+    
+    // 模态框外部点击关闭
+    window.addEventListener('click', (event) => {
+        if (event.target === document.getElementById('prompt-modal')) {
+            closePromptModal();
+        }
+        if (event.target === document.getElementById('dataset-modal')) {
+            closeNewDatasetModal();
+        }
+    });
+
+    // 数据集选择器变化
+    // 注意：这里不再需要添加事件监听器，因为我们在loadDatasets函数中已经添加了
+    
+    // 数据表选择器变化
     const tableSelector = document.getElementById('table-selector');
     if (tableSelector) {
         tableSelector.addEventListener('change', (e) => loadTrainingDataForTable(e.target.value));
     }
     
+    // 新增数据集表单提交
     const newDatasetForm = document.getElementById('new-dataset-form');
     if (newDatasetForm) {
         newDatasetForm.addEventListener('submit', handleNewDatasetSubmit);
+    }
+    
+    // 编辑数据集表单提交
+    const editDatasetForm = document.getElementById('edit-dataset-form');
+    if (editDatasetForm) {
+        editDatasetForm.addEventListener('submit', handleEditDatasetSubmit);
     }
     
     window.addEventListener('load', loadDatasets);
@@ -827,4 +1169,209 @@ function toggleVisibility(elementId) {
     } else {
         element.style.display = 'none';
     }
+}
+
+// --- Prompt Management Functions ---
+
+// 加载所有提示词
+async function loadPrompts() {
+    if (!activeDatasetId) return;
+    
+    try {
+        const response = await apiFetch('/api/prompts');
+        const prompts = response.prompts || [];
+        renderPromptsTable(prompts);
+    } catch (error) {
+        console.error('加载提示词失败:', error);
+        alert(`加载提示词失败: ${error.message}`);
+    }
+}
+
+// 渲染提示词表格
+function renderPromptsTable(prompts) {
+    const tableBody = document.getElementById('prompts-table-body');
+    tableBody.innerHTML = '';
+    
+    // 添加类型映射，将存储的值转换为更有意义的中文描述
+    const promptTypeMap = {
+        'analysis': '分析型（用於分析用戶問題和生成SQL）',
+        'documentation': '文檔型（用於生成數據庫文檔）',
+        'qa_generation': 'QA生成型（用於從SQL生成問答配對）',
+        'other': '其他類型',
+        '用於分析用戶問題和生成SQL的提示詞': '分析型（用於分析用戶問題和生成SQL）',
+        '用於從SQL生成問答配對的提示詞': 'QA生成型（用於從SQL生成問答配對）',
+        '用於生成數據庫文檔的提示詞': '文檔型（用於生成數據庫文檔）',
+        '默認提示詞': '默認提示詞'
+    };
+    
+    if (Array.isArray(prompts)) {
+        prompts.forEach((prompt) => {
+            const row = tableBody.insertRow();
+            row.dataset.id = prompt.id;
+            
+            const nameCell = row.insertCell();
+            nameCell.textContent = prompt.prompt_name;
+            
+            const typeCell = row.insertCell();
+            // 使用映射后的类型描述
+            typeCell.textContent = promptTypeMap[prompt.prompt_type] || prompt.prompt_type;
+            
+            const isGlobalCell = row.insertCell();
+            isGlobalCell.textContent = prompt.is_global ? '是' : '否';
+            
+            const actionCell = row.insertCell();
+            
+            const editBtn = document.createElement('button');
+            editBtn.textContent = '編輯';
+            editBtn.onclick = () => editPrompt(prompt);
+            actionCell.appendChild(editBtn);
+            
+            const resetBtn = document.createElement('button');
+            resetBtn.textContent = '重置默認';
+            resetBtn.onclick = () => resetPromptToDefault(prompt.id, prompt.prompt_name);
+            actionCell.appendChild(resetBtn);
+            
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = '刪除';
+            deleteBtn.onclick = () => deletePrompt(prompt.id, prompt.prompt_name);
+            actionCell.appendChild(deleteBtn);
+        });
+    }
+}
+
+// 打开提示词模态框
+function openPromptModal() {
+    const modal = document.getElementById('prompt-modal');
+    const modalTitle = document.getElementById('prompt-modal-title');
+    const form = document.getElementById('prompt-form');
+    
+    modalTitle.textContent = '新增提示詞';
+    form.reset();
+    document.getElementById('prompt-id').value = '';
+    modal.style.display = 'flex';
+}
+
+// 关闭提示词模态框
+function closePromptModal() {
+    const modal = document.getElementById('prompt-modal');
+    modal.style.display = 'none';
+}
+
+// 编辑提示词
+function editPrompt(prompt) {
+    const modal = document.getElementById('prompt-modal');
+    const modalTitle = document.getElementById('prompt-modal-title');
+    
+    modalTitle.textContent = '編輯提示詞';
+    document.getElementById('prompt-id').value = prompt.id;
+    document.getElementById('prompt-name').value = prompt.prompt_name;
+    document.getElementById('prompt-type').value = prompt.prompt_type;
+    document.getElementById('prompt-is-global').checked = prompt.is_global;
+    document.getElementById('prompt-content').value = prompt.prompt_content;
+    
+    modal.style.display = 'flex';
+}
+
+// 保存提示词
+async function savePrompt(event) {
+    event.preventDefault();
+    
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集');
+        return;
+    }
+    
+    const id = document.getElementById('prompt-id').value;
+    const name = document.getElementById('prompt-name').value.trim();
+    const type = document.getElementById('prompt-type').value;
+    const isGlobal = document.getElementById('prompt-is-global').checked;
+    const content = document.getElementById('prompt-content').value;
+    
+    if (!name) {
+        alert('請輸入提示詞名稱');
+        return;
+    }
+    
+    if (!content) {
+        alert('請輸入提示詞內容');
+        return;
+    }
+    
+    try {
+        const response = await apiFetch('/api/save_prompt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: id || null,
+                prompt_name: name,
+                prompt_type: type,
+                is_global: isGlobal,
+                prompt_content: content
+            })
+        });
+        
+        alert(response.message || '提示詞儲存成功');
+        closePromptModal();
+        await loadPrompts();
+    } catch (error) {
+        console.error('儲存提示詞失敗:', error);
+        alert(`儲存提示詞失敗: ${error.message}`);
+    }
+}
+
+// 删除提示词
+async function deletePrompt(promptId, promptName) {
+    if (!confirm(`確定要刪除提示詞 "${promptName}" 嗎？`)) {
+        return;
+    }
+    
+    try {
+        const response = await apiFetch('/api/delete_prompt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: promptId })
+        });
+        
+        alert(response.message || '提示詞刪除成功');
+        await loadPrompts();
+    } catch (error) {
+        console.error('刪除提示詞失敗:', error);
+        alert(`刪除提示詞失敗: ${error.message}`);
+    }
+}
+
+// 重置提示词为默认值
+async function resetPromptToDefault(promptId, promptName) {
+    if (!confirm(`確定要將提示詞 "${promptName}" 重置為默認值嗎？`)) {
+        return;
+    }
+    
+    try {
+        const response = await apiFetch(`/api/reset_prompt_to_default/${encodeURIComponent(promptName)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: promptId })
+        });
+        
+        alert(response.message || '提示詞已重置為默認值');
+        await loadPrompts();
+    } catch (error) {
+        console.error('重置提示詞失敗:', error);
+        alert(`重置提示詞失敗: ${error.message}`);
+    }
+}
+
+// 添加提示词表单提交事件监听器
+function setupPromptEventListeners() {
+    const promptForm = document.getElementById('prompt-form');
+    if (promptForm) {
+        promptForm.addEventListener('submit', savePrompt);
+    }
+}
+
+// 修改初始化函数，添加提示词相关事件监听器
+function init() {
+    setupEventListeners();
+    setupPromptEventListeners();
+    loadDatasets();
 }

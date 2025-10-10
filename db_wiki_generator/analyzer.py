@@ -1,4 +1,5 @@
 from typing import Any, Dict, List
+from datetime import datetime, timezone
 
 def analyze_schema(raw_schema: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -12,7 +13,7 @@ def analyze_schema(raw_schema: Dict[str, Any]) -> Dict[str, Any]:
     
     enriched_schema = {
         "database_name": "UnknownDB", # Placeholder
-        "generated_at": "", # Placeholder
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "schema_source": "db_adapter", # Placeholder
         "tables": []
     }

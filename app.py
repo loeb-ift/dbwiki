@@ -21,11 +21,44 @@ import traceback
 
 # Helper function to load prompt templates
 def load_prompt_template(filename):
-    # The prompt files are now located directly in the 'prompts' directory.
+    # 尝试从用户的提示词表中加载
+    try:
+        # 从session中获取当前用户ID
+        from flask import session
+        if 'username' in session:
+            user_id = session['username']
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                # 提取文件名（不含扩展名）作为prompt_name
+                prompt_name = os.path.splitext(filename)[0]
+                # 优先查找用户自定义的非全局提示词
+                cursor.execute(
+                    "SELECT prompt_content FROM training_prompts WHERE prompt_name = ? AND is_global = 0", 
+                    (prompt_name,)
+                )
+                result = cursor.fetchone()
+                if result:
+                    app.logger.info(f"Loaded custom prompt template '{filename}' from user database for user '{user_id}'")
+                    return result[0]
+                # 如果没有用户自定义的，则查找全局提示词（无论是用户自己设置的全局还是默认全局）
+                cursor.execute(
+                    "SELECT prompt_content FROM training_prompts WHERE prompt_name = ? AND is_global = 1", 
+                    (prompt_name,)
+                )
+                result = cursor.fetchone()
+                if result:
+                    app.logger.info(f"Loaded global prompt template '{filename}' from user database for user '{user_id}'")
+                    return result[0]
+    except Exception as e:
+        app.logger.warning(f"Failed to load prompt template from database: {e}")
+        # 即使数据库加载失败，也继续尝试从文件加载
+    
+    # 从文件加载作为后备方案
     path = os.path.join('prompts', filename)
-
+    
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
+            app.logger.info(f"Loaded prompt template '{filename}' from file system")
             return f.read()
     else:
         raise FileNotFoundError(f"Prompt template file not found in 'prompts/': {filename}")
@@ -36,7 +69,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src'
 from vanna.ollama import Ollama
 from vanna.openai import OpenAI_Chat
 from vanna.anthropic import Anthropic_Chat
-from vanna.google import Gemini_Chat
+from vanna.google import GoogleGeminiChat
 from vanna.chromadb import ChromaDB_VectorStore
 from vanna.types import TrainingPlan
 
@@ -52,6 +85,38 @@ try:
 except json.JSONDecodeError:
     app.logger.error("APP_USERS 環境變數格式錯誤，請使用正確的 JSON 格式。")
     users = {}
+
+# 辅助函数：获取数据集中的表列表
+def get_dataset_tables(user_id, dataset_id):
+    """获取指定数据集中的所有表列表"""
+    # 检查数据集是否存在并获取数据库路径
+    with get_user_db_connection(user_id) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT db_path FROM datasets WHERE id = ?", (dataset_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None, "Dataset not found"
+        db_path = row[0]
+    
+    try:
+        # 获取数据库中的表列表
+        engine = create_engine(f'sqlite:///{db_path}')
+        inspector = inspect(engine)
+        table_names = inspector.get_table_names()
+        
+        # 获取每个表的DDL语句
+        ddl_statements = []
+        with engine.connect() as connection:
+            for name in table_names:
+                ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
+                if ddl: ddl_statements.append(ddl + ";")
+        
+        return {
+            'table_names': table_names,
+            'ddl_statements': ddl_statements
+        }, None
+    except Exception as e:
+        return None, str(e)
 
 # Helper function to write logs to file
 def write_ask_log(user_id: str, log_type: str, content: str):
@@ -131,7 +196,8 @@ def init_training_db(user_id: str):
                 "training_documentation": "(id INTEGER PRIMARY KEY AUTOINCREMENT, documentation_text TEXT NOT NULL, table_name TEXT, dataset_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(dataset_id, table_name))",
                 "training_qa": "(id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT NOT NULL, sql_query TEXT NOT NULL, table_name TEXT, dataset_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
                 "datasets": "(id INTEGER PRIMARY KEY AUTOINCREMENT, dataset_name TEXT NOT NULL, db_path TEXT NOT NULL UNIQUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
-                "correction_rules": "(id INTEGER PRIMARY KEY AUTOINCREMENT, incorrect_name TEXT NOT NULL UNIQUE, correct_name TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+                "correction_rules": "(id INTEGER PRIMARY KEY AUTOINCREMENT, incorrect_name TEXT NOT NULL UNIQUE, correct_name TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+                "training_prompts": "(id INTEGER PRIMARY KEY AUTOINCREMENT, prompt_name TEXT NOT NULL, prompt_content TEXT NOT NULL, prompt_type TEXT, is_global INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(prompt_name, prompt_type))"
             }
             for table_name, schema in tables.items():
                 cursor.execute(f"CREATE TABLE IF NOT EXISTS {table_name} {schema};")
@@ -144,6 +210,30 @@ def init_training_db(user_id: str):
             add_column_if_not_exists('training_documentation', 'dataset_id', 'TEXT')
             add_column_if_not_exists('training_qa', 'dataset_id', 'TEXT')
             
+            # 初始化一些基础提示词类型
+            try:
+                base_prompt_types = [
+                    ('ask_analysis_prompt', '用於分析用戶問題和生成SQL的提示詞'),
+                    ('qa_generation_system_prompt', '用於從SQL生成問答配對的提示詞'),
+                    ('documentation_prompt', '用於生成數據庫文檔的提示詞')
+                ]
+                
+                # 检查是否已有基础提示词，如果没有则插入
+                for prompt_name, prompt_desc in base_prompt_types:
+                    cursor.execute("SELECT COUNT(*) FROM training_prompts WHERE prompt_name = ?", (prompt_name,))
+                    if cursor.fetchone()[0] == 0:
+                        # 尝试从全局提示词文件加载内容
+                        try:
+                            prompt_content = load_prompt_template(f"{prompt_name}.txt")
+                            cursor.execute(
+                                "INSERT INTO training_prompts (prompt_name, prompt_content, prompt_type, is_global) VALUES (?, ?, ?, ?)",
+                                (prompt_name, prompt_content, prompt_desc, 1)
+                            )
+                        except Exception as e:
+                            app.logger.warning(f"Failed to load default prompt {prompt_name}: {e}")
+            except Exception as e:
+                app.logger.warning(f"Failed to initialize base prompt types: {e}")
+            
             conn.commit()
     except sqlite3.Error as e:
         app.logger.error(f"Could not initialize/update training database for user '{user_id}': {e}")
@@ -155,47 +245,167 @@ class MyVanna(ChromaDB_VectorStore):
         app.logger.info(f"Initializing MyVanna instance for user: {user_id}")
         self.log_queue = Queue()
         self.user_id = user_id
+        self.config = config or {}
+        self.llm_choice = None
+        self.llm_instance = None
 
         # Determine which LLM to use based on environment variables
-        llm_choice = self._get_llm_choice()
+        self.llm_choice = self._get_llm_choice()
         
-        if llm_choice == 'ollama':
-            model = os.getenv('OLLAMA_MODEL')
-            if not model: raise ValueError("OLLAMA_MODEL not set.")
-            ollama_host = os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434')
-            app.logger.info(f"Initializing Ollama for user: {user_id} with model: {model}, host: {ollama_host}")
-            Ollama.__init__(self, config={'model': model, 'ollama_host': ollama_host})
-        elif llm_choice == 'openai':
-            api_key = os.getenv('OPENAI_API_KEY')
-            model = os.getenv('OPENAI_MODEL', 'gpt-4-turbo')
-            if not api_key: raise ValueError("OPENAI_API_KEY not set.")
-            app.logger.info(f"Initializing OpenAI for user: {user_id} with model: {model}")
-            OpenAI_Chat.__init__(self, config={'api_key': api_key, 'model': model})
-        elif llm_choice == 'anthropic':
-            api_key = os.getenv('ANTHROPIC_API_KEY')
-            model = os.getenv('ANTHROPIC_MODEL', 'claude-3-opus-20240229')
-            if not api_key: raise ValueError("ANTHROPIC_API_KEY not set.")
-            app.logger.info(f"Initializing Anthropic for user: {user_id} with model: {model}")
-            Anthropic_Chat.__init__(self, config={'api_key': api_key, 'model': model})
-        elif llm_choice == 'google':
-            api_key = os.getenv('GOOGLE_API_KEY')
-            model = os.getenv('GOOGLE_MODEL', 'gemini-1.5-pro-latest')
-            if not api_key: raise ValueError("GOOGLE_API_KEY not set.")
-            app.logger.info(f"Initializing Google Gemini for user: {user_id} with model: {model}")
-            Gemini_Chat.__init__(self, config={'api_key': api_key, 'model': model})
+        # Store LLM configuration without instantiating abstract classes
+        self.llm_config = {
+            'ollama_model': os.getenv('OLLAMA_MODEL'),
+            'ollama_host': os.getenv('OLLAMA_HOST', 'http://host.docker.internal:11434'),
+            'openai_api_key': os.getenv('OPENAI_API_KEY'),
+            'openai_model': os.getenv('OPENAI_MODEL', 'gpt-4-turbo'),
+            'anthropic_api_key': os.getenv('ANTHROPIC_API_KEY'),
+            'anthropic_model': os.getenv('ANTHROPIC_MODEL', 'claude-3-opus-20240229'),
+            'google_api_key': os.getenv('GOOGLE_API_KEY'),
+            'google_model': os.getenv('GOOGLE_MODEL', 'gemini-1.5-pro-latest'),
+        }
+        
+        # Log LLM choice
+        if self.llm_choice == 'openai':
+            app.logger.info(f"Using OpenAI for user: {user_id} with model: {self.llm_config['openai_model']}")
+        elif self.llm_choice == 'ollama':
+            app.logger.info(f"Using Ollama for user: {user_id} with model: {self.llm_config['ollama_model']}, host: {self.llm_config['ollama_host']}")
+        elif self.llm_choice == 'anthropic':
+            app.logger.info(f"Using Anthropic for user: {user_id} with model: {self.llm_config['anthropic_model']}")
+        elif self.llm_choice == 'google':
+            app.logger.info(f"Using Google Gemini for user: {user_id} with model: {self.llm_config['google_model']}")
         else:
-            raise ValueError("No valid LLM configuration found in environment variables.")
+            app.logger.warning(f"Unknown LLM choice: {self.llm_choice}")
 
         collection_name = f"vanna_training_data_{user_id}"
-        app.logger.info(f"Initializing ChromaDB_VectorStore for user: {user_id} with collection: {collection_name}")
-        ChromaDB_VectorStore.__init__(self, config={'collection_name': collection_name})
+        self.config['collection_name'] = collection_name
         
+        # Initialize parent class
+        app.logger.info(f"Initializing ChromaDB_VectorStore for user: {user_id} with collection: {collection_name}")
+        ChromaDB_VectorStore.__init__(self, config=self.config)
+
         # Store original methods to call them and log their results
-        # Use super() to get the methods from the base classes (Ollama or ChromaDB_VectorStore)
         self._original_get_similar_question_sql = super().get_similar_question_sql
         self._original_get_related_ddl = super().get_related_ddl
         self._original_get_related_documentation = super().get_related_documentation
-        self._original_generate_sql = super().generate_sql
+
+    # Implement abstract methods required by VannaBase
+    def system_message(self, message: str) -> any:
+        # Simple message wrapper implementation
+        return {'role': 'system', 'content': message}
+
+    def user_message(self, message: str) -> any:
+        # Simple message wrapper implementation
+        return {'role': 'user', 'content': message}
+
+    def assistant_message(self, message: str) -> any:
+        # Simple message wrapper implementation
+        return {'role': 'assistant', 'content': message}
+
+    def submit_prompt(self, prompt, **kwargs) -> str:
+        # Import LLM classes here to avoid circular imports
+        if self.llm_choice == 'openai':
+            from vanna.openai import OpenAI_Chat
+            # 设置配置
+            self.config['api_key'] = self.llm_config['openai_api_key']
+            self.config['model'] = self.llm_config['openai_model']
+            try:
+                openai_chat = OpenAI_Chat(config=self.config)
+                return openai_chat.submit_prompt(prompt, **kwargs)
+            except Exception as e:
+                app.logger.error(f"Error with OpenAI_Chat: {e}")
+                raise
+        elif self.llm_choice == 'ollama':
+            # Ollama类是抽象类，需要实现多个向量相关的抽象方法
+            # ChromaDB_VectorStore类已经实现了这些向量相关的方法
+            # 所以我们创建一个临时类，同时继承这两个类
+            from vanna.ollama.ollama import Ollama
+            from vanna.chromadb.chromadb_vector import ChromaDB_VectorStore
+            
+            # 设置Ollama配置
+            self.config['model'] = self.llm_config['ollama_model']
+            self.config['ollama_host'] = self.llm_config['ollama_host']
+            
+            try:
+                # 创建一个临时类，同时继承Ollama和ChromaDB_VectorStore
+                # 这样就能同时获得Ollama的LLM功能和ChromaDB_VectorStore的向量存储功能
+                class OllamaWithVectorStore(Ollama, ChromaDB_VectorStore):
+                    def __init__(self, config):
+                        # 初始化两个父类
+                        ChromaDB_VectorStore.__init__(self, config=config)
+                        
+                        # 导入ollama库
+                        try:
+                            ollama = __import__("ollama")
+                        except ImportError:
+                            raise ImportError("需要安装ollama库: pip install ollama")
+                        
+                        # 确保config包含必要的参数
+                        if not config:
+                            raise ValueError("config must contain at least Ollama model")
+                        if 'model' not in config:
+                            raise ValueError("config must contain at least Ollama model")
+                        
+                        # 初始化Ollama所需的属性
+                        self.host = config.get("ollama_host", "http://localhost:11434")
+                        self.model = config["model"]
+                        if ":" not in self.model:
+                            self.model += ":latest"
+                        
+                        self.ollama_timeout = config.get("ollama_timeout", 240.0)
+                        self.keep_alive = config.get('keep_alive', None)
+                        self.ollama_options = config.get('options', {})
+                        self.num_ctx = self.ollama_options.get('num_ctx', 2048)
+                        
+                        # 初始化ollama_client
+                        from httpx import Timeout
+                        self.ollama_client = ollama.Client(self.host, timeout=Timeout(self.ollama_timeout))
+                        
+                        # 拉取模型（如果需要）
+                        self._pull_model_if_ne(self.ollama_client, self.model)
+                    
+                    @staticmethod
+                    def _pull_model_if_ne(ollama_client, model):
+                        model_response = ollama_client.list()
+                        model_lists = [model_element['model'] for model_element in
+                                    model_response.get('models', [])]
+                        if model not in model_lists:
+                            ollama_client.pull(model)
+                
+                # 实例化这个临时类
+                ollama_instance = OllamaWithVectorStore(config=self.config)
+                return ollama_instance.submit_prompt(prompt, **kwargs)
+            except Exception as e:
+                app.logger.error(f"Error with Ollama: {e}")
+                raise
+        elif self.llm_choice == 'anthropic':
+            from vanna.anthropic import Anthropic_Chat
+            self.config['api_key'] = self.llm_config['anthropic_api_key']
+            self.config['model'] = self.llm_config['anthropic_model']
+            try:
+                anthropic_chat = Anthropic_Chat(config=self.config)
+                return anthropic_chat.submit_prompt(prompt, **kwargs)
+            except Exception as e:
+                app.logger.error(f"Error with Anthropic_Chat: {e}")
+                raise
+        elif self.llm_choice == 'google':
+            from vanna.google import GoogleGeminiChat
+            self.config['api_key'] = self.llm_config['google_api_key']
+            self.config['model'] = self.llm_config['google_model']
+            try:
+                google_chat = GoogleGeminiChat(config=self.config)
+                return google_chat.submit_prompt(prompt, **kwargs)
+            except Exception as e:
+                app.logger.error(f"Error with GoogleGeminiChat: {e}")
+                raise
+        else:
+            # Default implementation or raise exception
+            raise ValueError(f"Unsupported LLM choice: {self.llm_choice}")
+
+    # Store original method for generate_sql
+    def _get_original_generate_sql(self):
+        if not hasattr(self, '_original_generate_sql'):
+            self._original_generate_sql = super().generate_sql
+        return self._original_generate_sql
 
     def get_similar_question_sql(self, question: str, **kwargs):
         top_n = kwargs.pop('top_n', 5)
@@ -243,15 +453,17 @@ class MyVanna(ChromaDB_VectorStore):
         return sql_response
 
     def _get_llm_choice(self):
+        # Determine which LLM to use based on environment variables
         if os.getenv('OLLAMA_MODEL'):
             return 'ollama'
-        if os.getenv('OPENAI_API_KEY'):
+        elif os.getenv('OPENAI_API_KEY'):
             return 'openai'
-        if os.getenv('ANTHROPIC_API_KEY'):
+        elif os.getenv('ANTHROPIC_API_KEY'):
             return 'anthropic'
-        if os.getenv('GOOGLE_API_KEY'):
+        elif os.getenv('GOOGLE_API_KEY'):
             return 'google'
-        return None
+        else:
+            return 'openai'  # Default to OpenAI if no other LLM is configured
 
     def log(self, message: str, title: str = "資訊"):
         self.log_queue.put({'type': 'thinking_step', 'step': title, 'details': {'message': message}})
@@ -310,7 +522,7 @@ def logout():
     session.pop('active_dataset_id', None)
     return redirect(url_for('login'))
 
-@app.route('/api/datasets', methods=['GET', 'POST'])
+@app.route('/api/datasets', methods=['GET', 'POST', 'PUT', 'DELETE'])
 @api_login_required
 def handle_datasets():
     user_id = session['username']
@@ -318,10 +530,10 @@ def handle_datasets():
         with get_user_db_connection(user_id) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT id, dataset_name, created_at FROM datasets ORDER BY created_at DESC")
+            cursor.execute("SELECT id, dataset_name AS name, created_at FROM datasets ORDER BY created_at DESC")
             return jsonify({'status': 'success', 'datasets': [dict(row) for row in cursor.fetchall()]})
     
-    if request.method == 'POST':
+    elif request.method == 'POST':
         dataset_name = request.form.get('dataset_name')
         files = request.files.getlist('files')
         if not dataset_name or not files:
@@ -343,6 +555,60 @@ def handle_datasets():
             return jsonify({'status': 'success', 'dataset': {'id': new_id, 'dataset_name': dataset_name}}), 201
         except Exception as e:
             if os.path.exists(db_path): os.remove(db_path)
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+    elif request.method == 'PUT':
+        data = request.json
+        dataset_id = data.get('dataset_id')
+        new_name = data.get('new_name')
+        
+        if not dataset_id or not new_name:
+            return jsonify({'status': 'error', 'message': 'Dataset ID and new name are required.'}), 400
+        
+        try:
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                # 检查数据集是否存在
+                cursor.execute("SELECT id FROM datasets WHERE id = ?", (dataset_id,))
+                if not cursor.fetchone():
+                    return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
+                
+                # 更新数据集名称
+                cursor.execute("UPDATE datasets SET dataset_name = ? WHERE id = ?", (new_name, dataset_id))
+                conn.commit()
+            
+            return jsonify({'status': 'success', 'dataset': {'id': dataset_id, 'dataset_name': new_name}})
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+    elif request.method == 'DELETE':
+        data = request.json
+        dataset_id = data.get('dataset_id')
+        
+        if not dataset_id:
+            return jsonify({'status': 'error', 'message': 'Dataset ID is required.'}), 400
+        
+        try:
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                # 检查数据集是否存在并获取数据库路径
+                cursor.execute("SELECT db_path FROM datasets WHERE id = ?", (dataset_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
+                
+                db_path = row[0]
+                
+                # 删除数据集记录
+                cursor.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+                conn.commit()
+            
+            # 删除实际的数据库文件
+            if os.path.exists(db_path):
+                os.remove(db_path)
+            
+            return jsonify({'status': 'success', 'dataset_id': dataset_id})
+        except Exception as e:
             return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/datasets/activate', methods=['POST'])
@@ -378,6 +644,108 @@ def activate_dataset():
         })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/datasets/<dataset_id>/tables', methods=['GET'])
+@api_login_required
+def get_tables_in_dataset(dataset_id):
+    """获取指定数据集中的表列表"""
+    user_id = session['username']
+    
+    tables_info, error = get_dataset_tables(user_id, dataset_id)
+    if error:
+        return jsonify({'status': 'error', 'message': error}), 404 if error == "Dataset not found" else 500
+    
+    return jsonify({
+        'status': 'success',
+        'dataset_id': dataset_id,
+        'table_names': tables_info['table_names'],
+        'ddl_statements': tables_info['ddl_statements']
+    })
+
+@app.route('/api/datasets/files', methods=['POST', 'DELETE'])
+@api_login_required
+def handle_dataset_files():
+    user_id = session['username']
+    dataset_id = request.args.get('dataset_id')
+    
+    if not dataset_id:
+        return jsonify({'status': 'error', 'message': 'dataset_id is required.'}), 400
+    
+    # 检查数据集是否存在
+    with get_user_db_connection(user_id) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT db_path FROM datasets WHERE id = ?", (dataset_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({'status': 'error', 'message': 'Dataset not found.'}), 404
+        
+        db_path = row[0]
+    
+    if request.method == 'POST':
+        # 向数据集添加新的CSV文件
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({'status': 'error', 'message': 'No files uploaded.'}), 400
+        
+        try:
+            engine = create_engine(f'sqlite:///{db_path}')
+            added_tables = []
+            
+            for file in files:
+                if not file.name.endswith('.csv'):
+                    continue
+                
+                df = pd.read_csv(file.stream)
+                table_name = os.path.splitext(secure_filename(file.filename))[0].replace('-', '_').replace(' ', '_')
+                df.to_sql(table_name, engine, index=False, if_exists='replace')
+                added_tables.append(table_name)
+            
+            # 获取更新后的表列表
+            tables_info, _ = get_dataset_tables(user_id, dataset_id)
+            all_tables = tables_info['table_names']
+            
+            return jsonify({
+                'status': 'success', 
+                'message': f'Added {len(added_tables)} table(s) to dataset.',
+                'added_tables': added_tables,
+                'all_tables': all_tables
+            })
+        except Exception as e:
+            app.logger.error(f'Error adding files to dataset: {e}')
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+    elif request.method == 'DELETE':
+        # 从数据集删除表
+        data = request.json
+        table_name = data.get('table_name')
+        
+        if not table_name:
+            return jsonify({'status': 'error', 'message': 'table_name is required.'}), 400
+        
+        try:
+            engine = create_engine(f'sqlite:///{db_path}')
+            with engine.connect() as connection:
+                # 检查表是否存在
+                inspector = inspect(engine)
+                if table_name not in inspector.get_table_names():
+                    return jsonify({'status': 'error', 'message': f'Table {table_name} not found.'}), 404
+                
+                # 删除表
+                connection.execute(text(f'DROP TABLE IF EXISTS {table_name}'))
+                connection.commit()
+            
+            # 获取更新后的表列表
+            tables_info, _ = get_dataset_tables(user_id, dataset_id)
+            all_tables = tables_info['table_names']
+            
+            return jsonify({
+                'status': 'success', 
+                'message': f'Table {table_name} deleted successfully.',
+                'all_tables': all_tables
+            })
+        except Exception as e:
+            app.logger.error(f'Error deleting table from dataset: {e}')
+            return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/training_data', methods=['GET'])
 @api_login_required
@@ -1061,7 +1429,128 @@ def delete_all_qa():
         return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
 
 
+# --- Prompt Management API Routes ---
+# 支持两种路由路径，为了兼容前端代码
+@app.route('/api/prompts', methods=['GET'])
+@app.route('/api/get_prompts', methods=['GET'])
+@api_login_required
+def get_prompts():
+    user_id = session['username']
+    try:
+        with get_user_db_connection(user_id) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, prompt_name, prompt_content, prompt_type, is_global, created_at FROM training_prompts ORDER BY created_at DESC")
+            prompts = [dict(row) for row in cursor.fetchall()]
+            return jsonify({'status': 'success', 'prompts': prompts})
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error for user '{user_id}' in get_prompts: {e}")
+        return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
+
+@app.route('/api/save_prompt', methods=['POST'])
+@api_login_required
+def save_prompt():
+    user_id = session['username']
+    data = request.get_json()
+    
+    prompt_name = data.get('prompt_name')
+    prompt_content = data.get('prompt_content')
+    prompt_type = data.get('prompt_type')
+    is_global = 1 if data.get('is_global', False) else 0
+    prompt_id = data.get('id')
+    
+    if not prompt_name or not prompt_content:
+        return jsonify({'status': 'error', 'message': '提示詞名稱和內容是必需的。'}), 400
+    
+    try:
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            
+            if prompt_id:
+                # 更新现有提示词
+                cursor.execute(
+                    "UPDATE training_prompts SET prompt_name = ?, prompt_content = ?, prompt_type = ?, is_global = ? WHERE id = ?",
+                    (prompt_name, prompt_content, prompt_type, is_global, prompt_id)
+                )
+                message = '提示詞已更新。'
+            else:
+                # 插入新提示词
+                cursor.execute(
+                    "INSERT INTO training_prompts (prompt_name, prompt_content, prompt_type, is_global) VALUES (?, ?, ?, ?)",
+                    (prompt_name, prompt_content, prompt_type, is_global)
+                )
+                message = '提示詞已添加。'
+            
+            conn.commit()
+            return jsonify({'status': 'success', 'message': message})
+    except sqlite3.IntegrityError:
+        app.logger.warning(f"Integrity error for user '{user_id}' in save_prompt: Duplicate prompt name")
+        return jsonify({'status': 'error', 'message': '提示詞名稱已存在，請使用不同的名稱。'}), 400
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error for user '{user_id}' in save_prompt: {e}")
+        return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
+
+@app.route('/api/delete_prompt/<int:prompt_id>', methods=['DELETE'])
+@api_login_required
+def delete_prompt(prompt_id):
+    user_id = session['username']
+    try:
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM training_prompts WHERE id = ?", (prompt_id,))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return jsonify({'status': 'error', 'message': '提示詞不存在。'}), 404
+            return jsonify({'status': 'success', 'message': '提示詞已刪除。'})
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error for user '{user_id}' in delete_prompt: {e}")
+        return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
+
+@app.route('/api/reset_prompt_to_default/<string:prompt_name>', methods=['POST'])
+@api_login_required
+def reset_prompt_to_default(prompt_name):
+    user_id = session['username']
+    try:
+        # 尝试从全局提示词文件加载默认内容
+        prompt_content = load_prompt_template(f"{prompt_name}.txt")
+        
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            # 检查是否已存在该名称的提示词
+            cursor.execute("SELECT id FROM training_prompts WHERE prompt_name = ?", (prompt_name,))
+            result = cursor.fetchone()
+            
+            if result:
+                # 更新现有提示词为默认内容
+                cursor.execute(
+                    "UPDATE training_prompts SET prompt_content = ?, is_global = 1 WHERE id = ?",
+                    (prompt_content, result[0])
+                )
+            else:
+                # 插入新的默认提示词
+                prompt_type_map = {
+                    'ask_analysis_prompt': '用於分析用戶問題和生成SQL的提示詞',
+                    'qa_generation_system_prompt': '用於從SQL生成問答配對的提示詞',
+                    'documentation_prompt': '用於生成數據庫文檔的提示詞'
+                }
+                prompt_type = prompt_type_map.get(prompt_name, '默認提示詞')
+                cursor.execute(
+                    "INSERT INTO training_prompts (prompt_name, prompt_content, prompt_type, is_global) VALUES (?, ?, ?, ?)",
+                    (prompt_name, prompt_content, prompt_type, 1)
+                )
+            
+            conn.commit()
+            return jsonify({'status': 'success', 'message': '提示詞已重置為默認值。'})
+    except FileNotFoundError:
+        app.logger.warning(f"Default prompt file not found for '{prompt_name}'")
+        return jsonify({'status': 'error', 'message': '找不到默認提示詞文件。'}), 404
+    except sqlite3.Error as e:
+        app.logger.error(f"Database error for user '{user_id}' in reset_prompt_to_default: {e}")
+        return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
+
+
 if __name__ == '__main__':
 
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
-    app.run(host='0.0.0.0', debug=debug_mode, port=5001)
+    port = int(os.getenv('FLASK_RUN_PORT', '5001'))
+    app.run(host='0.0.0.0', debug=debug_mode, port=port)

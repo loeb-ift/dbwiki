@@ -37,6 +37,8 @@
                 <label for="dataset-selector">選擇資料集：</label>
                 <select id="dataset-selector"></select>
                 <button onclick="openNewDatasetModal()">+ 新增</button>
+                <button id="edit-dataset-btn" onclick="openEditDatasetModal()" disabled>編輯</button>
+                <button id="delete-dataset-btn" onclick="deleteDataset()" disabled>刪除</button>
             </div>
         </div>
 
@@ -102,6 +104,19 @@
             <h2>資料庫結構分析</h2>
             <pre id="documentation-output" style="white-space: pre-wrap; background-color: #f8f8f8; padding: 1em; border-radius: 4px;"></pre>
         </div>
+        
+        <div id="prompts-section" class="section" style="display: none;">
+            <h2>提示詞管理</h2>
+            <p>管理用於模型訓練和查詢的提示詞模板。您可以自定義提示詞，也可以使用全局默認提示詞。</p>
+            
+            <div class="table-container">
+                <table id="prompts-table">
+                    <thead><tr><th>提示詞名稱</th><th>提示詞類型</th><th>是否全局</th><th>操作</th></tr></thead>
+                    <tbody id="prompts-table-body"></tbody>
+                </table>
+                <button type="button" onclick="openPromptModal()">+ 新增提示詞</button>
+            </div>
+        </div>
 
         <div id="ask-section" class="section" style="display: none;">
             <h2>提出問題</h2>
@@ -131,7 +146,36 @@
         </div>
     </div>
 
-    <!-- New Dataset Modal -->
+    <!-- Edit Dataset Modal -->
+    <div id="edit-dataset-modal" class="modal">
+        <div class="modal-content">
+            <h2>編輯資料集</h2>
+            <form id="edit-dataset-form" onsubmit="return false;">
+                <input type="hidden" id="edit-dataset-id">
+                <p>修改您的資料集名稱。</p>
+                <label for="edit-dataset-name">資料集名稱:</label><br>
+                <input type="text" id="edit-dataset-name" name="dataset_name" required style="width:95%; margin-bottom:1em;"><br><br>
+                
+                <h3>CSV 文件管理</h3>
+                <div style="margin-bottom:1em;">
+                    <p>添加新的 CSV 文件到資料集:</p>
+                    <input type="file" id="edit-dataset-files" accept=".csv"><br>
+                    <button type="button" id="add-file-btn" style="margin-top: 10px;">添加文件</button>
+                </div>
+                
+                <div>
+                    <p>當前資料集中的文件:</p>
+                    <div id="current-files-list" style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 1em;"></div>
+                </div>
+                
+                <div style="text-align:right;">
+                    <button type="button" onclick="closeEditDatasetModal()">取消</button>
+                    <button type="submit" id="edit-dataset-submit-btn">儲存修改</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="new-dataset-modal" class="modal">
         <div class="modal-content">
             <h2>新增資料集</h2>
@@ -144,6 +188,38 @@
                 <div style="text-align:right;">
                     <button type="button" onclick="closeNewDatasetModal()">取消</button>
                     <button type="submit" id="new-dataset-submit-btn">上傳並創建</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Prompt Modal -->
+    <div id="prompt-modal" class="modal">
+        <div class="modal-content">
+            <h2 id="prompt-modal-title">新增提示詞</h2>
+            <form id="prompt-form" onsubmit="return false;">
+                <input type="hidden" id="prompt-id">
+                
+                <label for="prompt-name">提示詞名稱:</label><br>
+                <input type="text" id="prompt-name" name="prompt_name" required style="width:95%; margin-bottom:1em;"><br><br>
+                
+                <label for="prompt-type">提示詞類型:</label><br>
+                <select id="prompt-type" name="prompt_type" style="width:95%; margin-bottom:1em;">
+                    <option value="analysis">分析型</option>
+                    <option value="documentation">文檔型</option>
+                    <option value="qa_generation">QA生成型</option>
+                    <option value="other">其他</option>
+                </select><br><br>
+                
+                <label for="prompt-is-global">是否全局提示詞:</label>
+                <input type="checkbox" id="prompt-is-global" name="prompt_is_global" style="margin-bottom:1em;"><br><br>
+                
+                <label for="prompt-content">提示詞內容:</label><br>
+                <textarea id="prompt-content" name="prompt_content" rows="10" style="width:95%; margin-bottom:1em;"></textarea><br><br>
+                
+                <div style="text-align:right;">
+                    <button type="button" onclick="closePromptModal()">取消</button>
+                    <button type="submit" id="prompt-submit-btn">儲存</button>
                 </div>
             </form>
         </div>
