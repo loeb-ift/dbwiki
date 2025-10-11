@@ -3,17 +3,27 @@ import os
 import json
 from dotenv import load_dotenv
 
+from flask import Flask, session, request
+from datetime import timedelta
+
 def create_app():
     """Create and configure an instance of the Flask application."""
     # Get the project root directory
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # Create Flask app with explicit template and static folder paths
-    app = Flask(__name__, 
+    app = Flask(__name__,
                 template_folder=os.path.join(project_root, 'templates'),
                 static_folder=os.path.join(project_root, 'static'))
     load_dotenv()
     
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'a_strong_fixed_secret_key_for_session')
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=int(os.getenv('SESSION_TIMEOUT_MINUTES', 30)))
+
+    @app.before_request
+    def before_request():
+        session.permanent = True
+        app.permanent_session_lifetime = app.config['PERMANENT_SESSION_LIFETIME']
+        session.modified = True
     
     try:
         # Get users from environment variable

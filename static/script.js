@@ -14,7 +14,8 @@ async function apiFetch(url, options = {}) {
     try {
         // 确保options.headers存在并添加Dataset-Id头
         options.headers = options.headers || {};
-        if (!options.headers['Content-Type'] && options.body) {
+        // Do not set Content-Type for FormData, let the browser handle it.
+        if (!(options.body instanceof FormData) && !options.headers['Content-Type'] && options.body) {
             options.headers['Content-Type'] = 'application/json';
         }
         // 总是添加Dataset-Id头，即使为null，服务器可以据此判断状态
@@ -380,17 +381,28 @@ function renderQaTable() {
     updateBatchDeleteButton();
 }
 
-function addQaPairRow(question = '', sql = '') {
+function addQaPairRow(qa_pair = {}) {
+    const { id = '', question = '', sql = '' } = qa_pair;
     const tableBody = document.getElementById('qa-table-body');
-    const row = tableBody.insertRow();
-    row.dataset.id = '';
+    const row = tableBody.insertRow(0); // Insert at the top
+    row.dataset.id = id;
     
     // 添加复选框单元格
     const checkboxCell = row.insertCell();
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.className = 'qa-checkbox';
-    checkbox.disabled = true; // 新添加的行默认不能选中
+    checkbox.disabled = !id; // Disable checkbox if it's a new unsaved row
+    if (id) {
+        checkbox.onchange = function() {
+            if (this.checked) {
+                selectedQaIds.add(id);
+            } else {
+                selectedQaIds.delete(id);
+            }
+            updateBatchDeleteButton();
+        };
+    }
     checkboxCell.appendChild(checkbox);
 
     const questionCell = row.insertCell();
@@ -410,6 +422,10 @@ function addQaPairRow(question = '', sql = '') {
     const deleteBtn = document.createElement('button');
     deleteBtn.textContent = '刪除';
     deleteBtn.onclick = () => {
+        if (id) {
+            // Handle deletion of existing row
+            // This part can be improved to call an API to delete from DB
+        }
         row.remove();
     };
     actionCell.appendChild(deleteBtn);
@@ -1419,7 +1435,7 @@ async function generateQaFromSqlFile(file) {
                             addLog(`找到 ${totalQueries} 個 SQL 查詢語句。`);
                         } else if (data.status === 'progress' && data.qa_pair) {
                             processedQueries++;
-                            addQaPairRow(data.qa_pair.question, data.qa_pair.sql);
+                            addQaPairRow(data.qa_pair);
                             
                             // 更新进度条
                             if (totalQueries > 0 && progressContainer && progressBar && progressPercentage) {
@@ -1436,7 +1452,7 @@ async function generateQaFromSqlFile(file) {
                 }
             }
         }
-        alert('問答配對生成完成！請記得點擊 "儲存所有修改" 來保存新產生的配對。');
+        alert('問答配對生成完成！新的配對已自動儲存。');
 
     } catch (error) {
         console.error('An error occurred during QA generation from SQL file:', error);
@@ -1489,30 +1505,6 @@ async function generateAndDisplayDocumentation() {
     }
 }
 
-function addQaPairRow(question = '', sql = '') {
-    // 将新的问答对添加到当前页的开头
-    const newItem = { question, sql };
-    const currentStartIndex = (current_page - 1) * items_per_page;
-    currentQaData.splice(currentStartIndex, 0, newItem);
-    
-    // 如果添加新行后当前页超过了每页的数量限制，需要重新计算分页
-    total_pages = Math.ceil(currentQaData.length / items_per_page);
-    
-    renderQaTable();
-    renderPaginationControls({ current_page: current_page, total_pages: total_pages });
-    
-    // 自动选中新添加的行
-    setTimeout(() => {
-        const tableBody = document.getElementById('qa-table-body');
-        if (tableBody.rows.length > 0) {
-            const firstRow = tableBody.rows[0];
-            const questionTextarea = firstRow.cells[1]?.querySelector('textarea');
-            if (questionTextarea) {
-                questionTextarea.focus();
-            }
-        }
-    }, 100);
-}
 
 // --- File Upload Handlers ---
 function handleDocFileUpload(event) {
@@ -1596,13 +1588,15 @@ function renderPromptsTable(prompts) {
     
     // 添加类型映射，将存储的值转换为更有意义的中文描述
     const promptTypeMap = {
-        'analysis': '分析型（用於分析用戶問題和生成SQL）',
-        'documentation': '文檔型（用於生成數據庫文檔）',
-        'qa_generation': 'QA生成型（用於從SQL生成問答配對）',
-        'other': '其他類型',
-        '用於分析用戶問題和生成SQL的提示詞': '分析型（用於分析用戶問題和生成SQL）',
-        '用於從SQL生成問答配對的提示詞': 'QA生成型（用於從SQL生成問答配對）',
-        '用於生成數據庫文檔的提示詞': '文檔型（用於生成數據庫文檔）',
+        'ask_analysis_prompt': '用於分析用戶問題和生成SQL的提示詞',
+        'qa_generation_system_prompt': '用於從SQL生成問答配對的提示詞',
+        'documentation_prompt': '用於生成數據庫文檔的提示詞',
+        'plotly_generation_prompt': '用於生成 Plotly 圖表的提示詞',
+        'sql_generation': '用於生成 SQL 的提示詞',
+        'followup_question_generation': '用於生成後續問題的提示詞',
+        'summary_generation': '用於生成摘要的提示詞',
+        'question_rewriting': '用於重寫問題的提示詞',
+        'question_generation_from_sql': '用於從 SQL 生成問題的提示詞',
         '默認提示詞': '默認提示詞'
     };
     
@@ -1670,6 +1664,7 @@ function editPrompt(prompt) {
     document.getElementById('prompt-type').value = prompt.prompt_type;
     document.getElementById('prompt-is-global').checked = prompt.is_global;
     document.getElementById('prompt-content').value = prompt.prompt_content;
+    document.getElementById('prompt-description').textContent = prompt.description || '此提示詞沒有提供描述。';
     
     modal.style.display = 'flex';
 }

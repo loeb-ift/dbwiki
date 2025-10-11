@@ -4,55 +4,65 @@ from sqlalchemy import create_engine, inspect, text
 
 from .db_utils import get_user_db_connection
 
-def load_prompt_template(filename):
-    # This function has a dependency on the session, which might be problematic
-    # in a refactored structure. We will address this when creating blueprints.
+def load_prompt_template(prompt_type: str):
+    """
+    Loads a prompt template from the database based on its type.
+    It prioritizes user-specific prompts over global ones.
+    The prompt name is no longer used as a hardcoded identifier.
+    """
     try:
         from flask import session
         from app import app as flask_app
-        with flask_app.app_context():
-            if 'username' in session:
-                user_id = session['username']
-                with get_user_db_connection(user_id) as conn:
-                    cursor = conn.cursor()
-                    prompt_name = os.path.splitext(filename)[0]
-                    cursor.execute(
-                        "SELECT prompt_content FROM training_prompts WHERE prompt_name = ? AND is_global = 0", 
-                        (prompt_name,)
-                    )
-                    result = cursor.fetchone()
-                    if result:
-                        flask_app.logger.info(f"Loaded custom prompt template '{filename}' from user database for user '{user_id}'")
-                        return result[0]
-                    cursor.execute(
-                        "SELECT prompt_content FROM training_prompts WHERE prompt_name = ? AND is_global = 1", 
-                        (prompt_name,)
-                    )
-                    result = cursor.fetchone()
-                    if result:
-                        flask_app.logger.info(f"Loaded global prompt template '{filename}' from user database for user '{user_id}'")
-                        return result[0]
+        
+        user_id = session.get('username')
+
+        if not user_id:
+            # This case should ideally not happen for logged-in users,
+            # but as a fallback, we can try to get any global prompt of that type.
+            with get_user_db_connection('system') as conn: # Or a generic connection
+                 cursor = conn.cursor()
+                 cursor.execute(
+                    "SELECT prompt_content FROM training_prompts WHERE prompt_type = ? AND is_global = 1 LIMIT 1",
+                    (prompt_type,)
+                 )
+                 result = cursor.fetchone()
+                 if result:
+                     flask_app.logger.info(f"Loaded global prompt of type '{prompt_type}' for unauthenticated user.")
+                     return result[0]
+
+        # For logged-in users
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            # First, try to find a user-specific (is_global=0) prompt of this type
+            cursor.execute(
+                "SELECT prompt_content FROM training_prompts WHERE prompt_type = ? AND is_global = 0",
+                (prompt_type,)
+            )
+            result = cursor.fetchone()
+            if result:
+                flask_app.logger.info(f"Loaded user-specific prompt for type '{prompt_type}' for user '{user_id}'")
+                return result[0]
+
+            # If not found, fall back to a global prompt of this type
+            cursor.execute(
+                "SELECT prompt_content FROM training_prompts WHERE prompt_type = ? AND is_global = 1",
+                (prompt_type,)
+            )
+            result = cursor.fetchone()
+            if result:
+                flask_app.logger.info(f"Loaded global prompt for type '{prompt_type}' for user '{user_id}'")
+                return result[0]
+
     except Exception as e:
         try:
             from app import app as flask_app
             with flask_app.app_context():
-                flask_app.logger.warning(f"Failed to load prompt template from database: {e}")
+                flask_app.logger.error(f"Failed to load prompt of type '{prompt_type}' from database: {e}")
         except (ImportError, RuntimeError):
-            print(f"Failed to load prompt template from database: {e}")
-    
-    path = os.path.join('prompts', filename)
-    
-    if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
-            try:
-                from app import app as flask_app
-                with flask_app.app_context():
-                    flask_app.logger.info(f"Loaded prompt template '{filename}' from file system")
-            except (ImportError, RuntimeError):
-                print(f"Loaded prompt template '{filename}' from file system")
-            return f.read()
-    else:
-        raise FileNotFoundError(f"Prompt template file not found in 'prompts/': {filename}")
+            print(f"Failed to load prompt of type '{prompt_type}' from database: {e}")
+
+    # If no prompt is found in the database, raise an error.
+    raise FileNotFoundError(f"Prompt of type '{prompt_type}' not found in the database.")
 
 def write_ask_log(user_id: str, log_type: str, content: str):
     log_dir = os.path.join(os.getcwd(), 'ask_log')

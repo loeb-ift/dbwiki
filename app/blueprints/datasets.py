@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, inspect, text
 from werkzeug.utils import secure_filename
 
 from app.core.helpers import get_dataset_tables
-from app.models import get_user_db_connection
+from app.core.db_utils import get_user_db_connection
 from app.vanna_wrapper import get_vanna_instance, configure_vanna_for_request
 from app.utils.decorators import login_required
 

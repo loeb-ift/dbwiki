@@ -1,7 +1,7 @@
 from app.core.vanna_core import MyVanna as BaseMyVanna
 import os
 import logging
-from app.utils.utils import load_prompt_template
+from app.core.helpers import load_prompt_template, write_ask_log
 
 # 配置日志记录器
 handler = logging.StreamHandler()
@@ -41,7 +41,6 @@ class MyVanna(BaseMyVanna):
             similar_questions = super().get_similar_question_sql(question, top_n=n)
             logger.info(f"Found {len(similar_questions)} similar questions")
             # 确保结果被写入日志
-            from app.core.helpers import write_ask_log
             write_ask_log(self.user_id, "get_similar_question_sql_results", str(similar_questions))
             return similar_questions
         except Exception as e:
@@ -53,7 +52,6 @@ class MyVanna(BaseMyVanna):
             related_ddl = super().get_related_ddl(question, top_n=n)
             logger.info(f"Found {len(related_ddl)} related DDL statements")
             # 确保结果被写入日志
-            from app.core.helpers import write_ask_log
             write_ask_log(self.user_id, "get_related_ddl_results", str(related_ddl))
             return related_ddl
         except Exception as e:
@@ -65,7 +63,6 @@ class MyVanna(BaseMyVanna):
             related_docs = super().get_related_documentation(question, top_n=n)
             logger.info(f"Found {len(related_docs)} related documentation entries")
             # 确保结果被写入日志
-            from app.core.helpers import write_ask_log
             write_ask_log(self.user_id, "get_related_documentation_results", str(related_docs))
             return related_docs
         except Exception as e:
@@ -189,7 +186,7 @@ def configure_vanna_for_request(vn, user_id, dataset_id=None):
     elif not dataset_id:
         raise Exception("未选择活跃的数据集，请先选择一个数据集。")
     
-    from app.models import get_user_db_connection
+    from app.core.db_utils import get_user_db_connection
     from sqlalchemy import create_engine
     import pandas as pd
     import os

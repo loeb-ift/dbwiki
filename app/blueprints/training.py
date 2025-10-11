@@ -191,7 +191,8 @@ def generate_qa_from_sql():
             queries = [q.strip() for q in sql_content.split(';') if q.strip()]
             total_queries = len(queries)
             yield f"data: {json.dumps({'status': 'starting', 'total': total_queries, 'message': '開始生成問答配對...'})}\n\n"
-            qa_system_prompt = load_prompt_template('qa_generation_system_prompt.txt')
+            from .prompts import get_prompt
+            qa_system_prompt = get_prompt('qa_generation_system', user_id=session.get('username'))
             
             with get_user_db_connection(user_id) as conn:
                 cursor = conn.cursor()
@@ -206,10 +207,11 @@ def generate_qa_from_sql():
                             "INSERT INTO training_qa (question, sql_query, table_name, dataset_id) VALUES (?, ?, ?, ?)",
                             (question, sql_query, 'global', dataset_id)
                         )
+                        new_id = cursor.lastrowid
                         conn.commit()
                         
                         percentage = int(((i + 1) / total_queries) * 100)
-                        yield f"data: {json.dumps({'status': 'progress', 'percentage': percentage, 'message': f'已生成 {i + 1}/{total_queries} 個問答配對', 'qa_pair': {'question': question, 'sql': sql_query}})}\n\n"
+                        yield f"data: {json.dumps({'status': 'progress', 'percentage': percentage, 'message': f'已生成 {i + 1}/{total_queries} 個問答配對', 'qa_pair': {'id': new_id, 'question': question, 'sql': sql_query}})}\n\n"
                     except Exception as e:
                         yield f"data: {json.dumps({'status': 'warning', 'message': f'生成問題時發生錯誤: {str(e)} (SQL: {sql_query[:50]}...)'})}\n\n"
                 
@@ -251,7 +253,7 @@ def analyze_schema():
             qa_pairs_rows = cursor.fetchall()
             qa_pairs_str = "\n".join([f"問: {row['question']}\n答: {row['sql_query']}" for row in qa_pairs_rows])
 
-        documentation_prompt_content = load_prompt_template('documentation_prompt.txt')
+        documentation_prompt_content = load_prompt_template('documentation')
         
         prompt_content = f"""
 DDL 語句:

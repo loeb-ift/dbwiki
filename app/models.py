@@ -88,15 +88,11 @@ def connect_user_db(db_path):
     return conn
 
 # 获取用户数据库路径
-def get_user_db_path(user_id: str) -> str:
-    db_dir = os.path.join(os.getcwd(), 'user_data')
-    os.makedirs(db_dir, exist_ok=True)
-    return os.path.join(db_dir, f'training_data_{user_id}.sqlite')
-
-# 获取用户数据库连接
-def get_user_db_connection(user_id: str) -> sqlite3.Connection:
-    db_path = get_user_db_path(user_id)
-    return sqlite3.connect(db_path)
+# These functions are deprecated and moved to app.core.db_utils
+# def get_user_db_path(user_id: str) -> str:
+#     ...
+# def get_user_db_connection(user_id: str) -> sqlite3.Connection:
+#     ...
 
 # 获取数据集表列表
 def get_dataset_tables(conn):

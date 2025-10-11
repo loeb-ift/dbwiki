@@ -35,56 +35,9 @@ def ask_question():
             
             vn = configure_vanna_for_request(vn_instance, user_id, dataset_id)
         
-            try:
-                temp_dir = os.path.join(os.getcwd(), 'temp_vanna_data')
-                if os.path.exists(temp_dir):
-                    latest_file = None
-                    latest_timestamp = 0
-                    for filename in os.listdir(temp_dir):
-                        if filename.startswith(f"training_data_{user_id}_{dataset_id}_") and filename.endswith(".json"):
-                            try:
-                                timestamp_str = filename.split('_')[-1].split('.')[0]
-                                timestamp = int(timestamp_str)
-                                if timestamp > latest_timestamp:
-                                    latest_timestamp = timestamp
-                                    latest_file = os.path.join(temp_dir, filename)
-                            except ValueError:
-                                continue
-
-                    if latest_file and os.path.exists(latest_file):
-                        with open(latest_file, 'r', encoding='utf-8') as f:
-                            temp_training_data = json.load(f)
-                        
-                        vn.log(f"從暫存文件加載訓練數據: {latest_file}", "資訊")
-                        
-                        if temp_training_data.get('documentation'):
-                            documentation_data = temp_training_data['documentation']
-                            if isinstance(documentation_data, list):
-                                for doc_item in documentation_data:
-                                    if isinstance(doc_item, str):
-                                        vn.train(documentation=doc_item)
-                            elif isinstance(documentation_data, str):
-                                vn.train(documentation=documentation_data)
-                        
-                        if temp_training_data.get('qa_pairs'):
-                            for qa_pair in temp_training_data['qa_pairs']:
-                                if isinstance(qa_pair, dict) and qa_pair.get('question') and qa_pair.get('sql'):
-                                    question_str = str(qa_pair['question'])
-                                    sql_str = str(qa_pair['sql'])
-                                    vn.train(question=question_str, sql=sql_str)
-                        
-                        if temp_training_data.get('dataset_analysis'):
-                            dataset_analysis_data = temp_training_data['dataset_analysis']
-                            if isinstance(dataset_analysis_data, list):
-                                for analysis_item in dataset_analysis_data:
-                                    if isinstance(analysis_item, str):
-                                        vn.train(documentation=analysis_item)
-                            elif isinstance(dataset_analysis_data, str):
-                                vn.train(documentation=dataset_analysis_data)
-            except Exception as e:
-                vn.log(f"從暫存文件加載訓練數據時出錯: {e}", "錯誤")
-                write_ask_log(user_id, "load_training_data_error", str(e))
-
+            # The following block is removed as it incorrectly re-trains data from a temp file on every ask.
+            # The correct approach is to rely on the already trained data in the vector database.
+            # The training should happen separately in the training section of the application.
             similar_qa = vn.get_similar_question_sql(question=question)
             # -- DEBUG LOGGING START --
             log_message = f"Found {len(similar_qa)} similar QA pairs."
@@ -179,7 +132,7 @@ def ask_question():
 
             analysis_result = None
             try:
-                ask_analysis_prompt_template = load_prompt_template('ask_analysis_prompt.txt')
+                ask_analysis_prompt_template = load_prompt_template('analysis')
                 all_logs_content = _get_all_ask_logs(user_id)
                 formatted_similar_qa = all_logs_content.get("get_similar_question_sql_results", "無")
                 
