@@ -1,0 +1,68 @@
+[
+  {
+    "batch": 1,
+    "item": 1,
+    "question": "哪個城市的總銷售額最高？",
+    "original_sql": "SELECT \"City\", SUM(\"Sales\") AS \"TotalSales\" FROM \"SuperMarketAnalysis\" GROUP BY \"City\" ORDER BY \"TotalSales\" DESC LIMIT 1;",
+    "generated_sql": "SELECT '' AS city, SUM(total_amount) AS total_sales FROM orders GROUP BY '' ORDER BY total_sales DESC LIMIT 1;",
+    "is_success": true,
+    "reason": "SQL匹配成功，关键词相似度: 0.79",
+    "execution_time": 13.601034164428711,
+    "timestamp": "2025-10-12T01:25:38.842764"
+  },
+  {
+    "batch": 1,
+    "item": 2,
+    "question": "不同客戶類型的平均評分是多少？",
+    "original_sql": "SELECT \"Customer type\", AVG(\"Rating\") AS \"AverageRating\" FROM \"SuperMarketAnalysis\" GROUP BY \"Customer type\";",
+    "generated_sql": "with that.",
+    "is_success": false,
+    "reason": "生成的内容不是有效的SQL查询",
+    "execution_time": 2.3144431114196777,
+    "timestamp": "2025-10-12T01:25:43.163811"
+  },
+  {
+    "batch": 1,
+    "item": 3,
+    "question": "哪個產品線的總收入最高？",
+    "original_sql": "SELECT \"Product line\", SUM(\"gross income\") AS \"TotalGrossIncome\" FROM \"SuperMarketAnalysis\" GROUP BY \"Product line\" ORDER BY \"TotalGrossIncome\" DESC LIMIT 1;",
+    "generated_sql": "SELECT category, SUM(price * stock) AS total_revenue\nFROM products\nGROUP BY category\nORDER BY total_revenue DESC\nLIMIT 1;",
+    "is_success": false,
+    "reason": "SQL不匹配，关键词相似度: 0.62",
+    "execution_time": 4.777436971664429,
+    "timestamp": "2025-10-12T01:25:49.946484"
+  },
+  {
+    "batch": 1,
+    "item": 4,
+    "question": "男性和女性顧客的平均銷貨成本（cogs）有何不同？",
+    "original_sql": "SELECT \"Gender\", AVG(\"cogs\") AS \"AverageCOGS\" FROM \"SuperMarketAnalysis\" GROUP BY \"Gender\";",
+    "generated_sql": "I’m sorry, but there isn’t enough information in the provided tables to calculate or compare the average COGS for male and female customers.",
+    "is_success": false,
+    "reason": "生成的内容不是有效的SQL查询",
+    "execution_time": 2.82755184173584,
+    "timestamp": "2025-10-12T01:25:54.775395"
+  },
+  {
+    "batch": 1,
+    "item": 5,
+    "question": "哪種付款方式最受歡迎？",
+    "original_sql": "SELECT \"Payment\", COUNT(*) AS \"PaymentCount\" FROM \"SuperMarketAnalysis\" GROUP BY \"Payment\" ORDER BY \"PaymentCount\" DESC LIMIT 1;",
+    "generated_sql": "SELECT payment_method, COUNT(*) AS orders_count\nFROM orders\nGROUP BY payment_method\nORDER BY orders_count DESC\nLIMIT 1;",
+    "is_success": true,
+    "reason": "SQL匹配成功，关键词相似度: 0.77",
+    "execution_time": 7.258131265640259,
+    "timestamp": "2025-10-12T01:26:04.035027"
+  },
+  {
+    "batch": 1,
+    "item": 6,
+    "question": "顯示每個分店的總銷售額。",
+    "original_sql": "SELECT \"Branch\", SUM(\"Sales\") AS \"TotalSales\" FROM \"SuperMarketAnalysis\" GROUP BY \"Branch\";",
+    "generated_sql": "SELECT store_id, SUM(total_amount) AS total_sales\nFROM orders\nGROUP BY store_id;",
+    "is_success": false,
+    "reason": "SQL不匹配，关键词相似度: 0.60",
+    "execution_time": 12.86442494392395,
+    "timestamp": "2025-10-12T01:26:18.902279"
+  }
+]

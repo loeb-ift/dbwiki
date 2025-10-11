@@ -1,0 +1,11 @@
+{
+  "total_tested": 6,
+  "success_count": 2,
+  "failure_count": 4,
+  "success_rate": 33.33333333333333,
+  "start_time": "20251012_012525",
+  "end_time": "20251012_012618",
+  "qa_file_path": "/Users/loeb/LAB/dbwiki/supermarket_qa.json",
+  "user_id": "test_user",
+  "dataset_id": "1"
+}
