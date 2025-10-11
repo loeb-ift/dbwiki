@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL 查詢思考過程分析表示範</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css/github-markdown.min.css">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+            margin: 0;
+            padding: 20px;
+        }
+        .markdown-body {
+            max-width: 850px;
+            margin: 0 auto;
+            padding: 30px;
+            background-color: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 8px;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        pre {
+            background-color: #f6f8fa;
+            border-radius: 4px;
+            padding: 16px;
+            overflow-x: auto;
+        }
+        code {
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        }
+        .highlight {
+            background-color: #fff3cd;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="markdown-body">
+        <h1>SQL 查詢思考過程分析表示範</h1>
+        
+        <div class="section">
+            <h2 id="section-1">1. 原始問題</h2>
+            <p>找出超市中各產品線的平均銷售額、平均評價和總銷售量。</p>
+        </div>
+        
+        <div class="section">
+            <h2 id="section-2">2. 檢索到的相似問題與 SQL 範例</h2>
+            <p>系統檢索到以下相似問題及其對應的 SQL 範例，這些範例有助於理解問題的意圖和可能的查詢模式。</p>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>相似問題</th>
+                        <th>相關 SQL 範例</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>顯示所有訂單的總金額</td>
+                        <td><code>SELECT SUM(total_amount) FROM orders;</code></td>
+                    </tr>
+                    <tr>
+                        <td>找出最近一個月的銷售額</td>
+                        <td><code>SELECT SUM(amount) FROM sales WHERE sale_date >= DATE('now', '-1 month');</code></td>
+                    </tr>
+                    <tr>
+                        <td>顯示超市各分行的銷售量排行</td>
+                        <td><code>SELECT Branch, SUM(Quantity) AS total_quantity FROM SuperMarketAnalysis GROUP BY Branch ORDER BY total_quantity DESC;</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2 id="section-3">3. 檢索到的相關資料庫結構 (DDL)</h2>
+            <p>系統檢索到以下與問題相關的資料庫表結構定義 (DDL)。</p>
+            
+            <pre><code class="language-sql">CREATE TABLE SuperMarketAnalysis (
+  "Invoice ID" TEXT,
+  Branch TEXT,
+  City TEXT,
+  "Customer type" TEXT,
+  Gender TEXT,
+  "Product line" TEXT,
+  "Unit price" TEXT,
+  Quantity TEXT,
+  "Tax 5%" TEXT,
+  Sales TEXT,
+  Date TEXT,
+  Time TEXT,
+  Payment TEXT,
+  cogs TEXT,
+  "gross margin percentage" TEXT,
+  "gross income" TEXT,
+  Rating TEXT
+);</code></pre>
+        </div>
+        
+        <div class="section">
+            <h2 id="section-4">4. 檢索到的相關業務文件</h2>
+            <p>系統檢索到以下與問題相關的業務文件或知識背景。</p>
+            
+            <ul>
+                <li>業務規則：訂單總金額包含稅費，<span class="highlight">"Tax 5%"</span> 字段表示 5% 的稅金。</li>
+                <li>資料定義：<span class="highlight">"Invoice ID"</span> 是訂單的唯一識別碼。</li>
+                <li>業務知識：SuperMarketAnalysis 表包含超市的銷售數據，涵蓋不同分行、城市、顧客類型和產品線的銷售記錄。</li>
+                <li>資料說明：<span class="highlight">"gross income"</span> 字段表示毛利，<span class="highlight">"gross margin percentage"</span> 表示毛利率百分比。</li>
+            </ul>
+        </div>
+        
+        <div class="section">
+            <h2 id="section-5">5. 綜合分析與 SQL 構建思路</h2>
+            <p>LLM 根據上述資訊，識別出關鍵實體為 <code>SuperMarketAnalysis</code> 表。推斷出問題可能涉及銷售數據的匯總、分組和排序操作。利用 DDL 確定了表中包含的字段，如 <code>Branch</code>、<code>City</code>、<code>Product line</code>、<code>Sales</code>、<code>Quantity</code> 等。</p>
+            
+            <p>分析過程中參考了相似問題的 SQL 範例，學習了如何使用 SUM() 彙總函數、GROUP BY 分組和 ORDER BY 排序子句。同時考慮了業務規則，確保在計算時正確處理了包含稅費的銷售金額。</p>
+            
+            <p>最終構建了符合 SQLite 方言、語義正確且可執行的 SQL 查詢語句：</p>
+            
+            <pre><code class="language-sql">SELECT "Product line",
+       AVG(CAST(Sales AS REAL)) AS avg_sales,
+       AVG(CAST(Rating AS REAL)) AS avg_rating,
+       SUM(CAST(Quantity AS INTEGER)) AS total_quantity
+FROM SuperMarketAnalysis
+GROUP BY "Product line"
+ORDER BY avg_sales DESC;</code></pre>
+        </div>
+        
+        <hr>
+        
+        <div class="note">
+            <p><em>請務必以繁體中文生成所有分析結果和建議。</em></p>
+        </div>
+    </div>
+    
+    <script>
+        // 模擬頁面加載後的渲染效果
+        document.addEventListener('DOMContentLoaded', function() {
+            // 在真實系統中，這部分由 marked.js 處理
+            console.log('SQL 查詢思考過程分析表已渲染完畢');
+        });
+    </script>
+</body>
+</html>

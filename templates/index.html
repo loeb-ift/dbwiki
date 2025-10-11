@@ -66,16 +66,37 @@
 
             <h3>c. SQL 問答配對</h3>
             <div id="qa-list-container" class="table-container">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <div>
+                        <button id="select-all-qa-btn" type="button" onclick="selectAllQaRows()">全選</button>
+                        <button id="batch-delete-qa-btn" type="button" onclick="batchDeleteQaRows()" disabled>批次刪除</button>
+                    </div>
+                    <div>
+                        <button type="button" onclick="addQaPairRow()">+ 新增問答</button>
+                        <button id="save-all-qa-btn" type="button" onclick="saveAllQaModifications()" style="margin-left: 10px;">儲存所有修改</button>
+                    </div>
+                </div>
                 <table id="qa-table">
-                    <thead><tr><th>SQL說明 (問題)</th><th>SQL語法</th><th>操作</th></tr></thead>
+                    <thead><tr><th><input type="checkbox" id="select-all-checkbox" onchange="selectAllQaRows()"></th><th>SQL說明 (問題)</th><th>SQL語法</th><th>操作</th></tr></thead>
                     <tbody id="qa-table-body"></tbody>
                 </table>
-                <button type="button" onclick="addQaPairRow()">+ 新增問答</button>
-                <button id="save-all-qa-btn" type="button" onclick="saveAllQaModifications()" style="margin-left: 10px;">儲存所有修改</button>
-                <div id="qa-pagination-controls" style="margin-top: 1em; text-align: center;"></div>
+                <div id="qa-pagination-controls" style="margin-top: 1em; text-align: center;">
+                    <button id="prev-page-btn" disabled>上一頁</button>
+                    <span id="page-info" style="margin: 0 1em;">第 1 / 1 頁</span>
+                    <button id="next-page-btn" disabled>下一頁</button>
+                </div>
                 <div class="form-group" style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
                     <label for="qa-file-input">或上傳檔案生成 (.sql):</label>
                     <input type="file" id="qa-file-input" accept=".sql" onchange="handleQaFileUpload(event)">
+                </div>
+                <div id="qa-upload-progress-container" style="margin-top: 10px; display: none;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <span>上傳進度:</span>
+                        <span id="qa-upload-percentage">0%</span>
+                    </div>
+                    <div style="width: 100%; height: 20px; background-color: #f1f1f1; border-radius: 4px;">
+                        <div id="qa-upload-progress-bar" style="height: 100%; width: 0; background-color: #4CAF50; border-radius: 4px; transition: width 0.3s;"></div>
+                    </div>
                 </div>
                 <div id="qa-gen-log-container" style="margin-top: 1em; display: none;">
                     <h4>生成日誌：</h4>
@@ -85,6 +106,15 @@
             <br>
 
             <button id="train-model-btn" type="button" onclick="trainModel()" style="display: block; margin: 1em auto; padding: 0.8em 1.5em; font-size: 1.2em;">重新訓練整個模型</button>
+            <div style="margin-top: 1em;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span>訓練進度:</span>
+                    <span id="training-percentage">0%</span>
+                </div>
+                <div style="width: 100%; height: 20px; background-color: #f1f1f1; border-radius: 4px;">
+                    <div id="training-progress-bar" style="height: 100%; width: 0; background-color: #2196F3; border-radius: 4px; transition: width 0.3s;"></div>
+                </div>
+            </div>
             <div id="training-log-container" style="margin-top: 1em; display: none;">
                 <h4>訓練日誌：</h4>
                 <pre id="training-log"></pre>

@@ -4,10 +4,22 @@ let activeTable = 'global';
 let fullDdlMap = {};
 let tableNames = [];
 let currentQaData = [];
+let current_page = 1;
+const items_per_page = 10;
+let total_pages = 1;
+let selectedQaIds = new Set();
 
 // --- API Wrapper ---
 async function apiFetch(url, options = {}) {
     try {
+        // 确保options.headers存在并添加Dataset-Id头
+        options.headers = options.headers || {};
+        if (!options.headers['Content-Type'] && options.body) {
+            options.headers['Content-Type'] = 'application/json';
+        }
+        // 总是添加Dataset-Id头，即使为null，服务器可以据此判断状态
+        options.headers['Dataset-Id'] = activeDatasetId;
+        
         const response = await fetch(url, options);
         if (!response.ok) {
             const error = await response.json();
@@ -60,7 +72,10 @@ async function activateDataset(datasetId) {
     fullDdlMap = {};
     tableNames = [];
     currentQaData = [];
+    current_page = 1;
+    total_pages = 1;
     activeTable = 'global';
+    selectedQaIds = new Set();
     
     if (!datasetId) {
         return;
@@ -125,9 +140,21 @@ function populateTableSelector() {
 }
 
 async function loadTrainingDataForTable(tableName, page = 1) {
-    if (!activeDatasetId || !tableName) return;
+    // 首先检查是否有活跃的数据集
+    if (!activeDatasetId) {
+        console.error('No active dataset selected when trying to load training data');
+        alert('請先選擇一個資料集。');
+        return;
+    }
+    
+    // 然后检查表名是否有效
+    if (!tableName) {
+        alert('請選擇一個有效的資料表。');
+        return;
+    }
     
     activeTable = tableName;
+    current_page = page;
     
     try {
         const ddlInput = document.getElementById('ddl-input');
@@ -137,13 +164,28 @@ async function loadTrainingDataForTable(tableName, page = 1) {
             ddlInput.value = fullDdlMap[tableName] || `/* 找不到資料表 "${tableName}" 的 DDL。 */`;
         }
         
+        // 安全检查：在API调用前再次验证activeDatasetId
+        if (!activeDatasetId) {
+            console.error('Dataset deselected while preparing API request');
+            alert('請先選擇一個資料集。');
+            return;
+        }
+        
         const data = await apiFetch(`/api/training_data?table_name=${encodeURIComponent(tableName)}&page=${page}`);
         document.getElementById('doc-input').value = data.documentation || '';
         currentQaData = Array.isArray(data.qa_pairs) ? data.qa_pairs : [];
         
+        // 如果API返回分页信息，使用API的分页数据
+        if (data.pagination) {
+            total_pages = data.pagination.total_pages || 1;
+        } else {
+            // 否则本地计算分页
+            total_pages = Math.ceil(currentQaData.length / items_per_page);
+        }
+        
         renderQaTable();
-        renderPaginationControls(data.pagination);
-
+        renderPaginationControls(data.pagination || { current_page: page, total_pages: total_pages });
+        
         // Load and display dataset analysis if available
         if (tableName === 'global' && data.dataset_analysis) {
             document.getElementById('documentation-output').textContent = data.dataset_analysis;
@@ -189,6 +231,36 @@ function renderPaginationControls(pagination) {
     if (!controlsContainer) return;
     controlsContainer.innerHTML = '';
 
+    // 添加全选和批次删除按钮
+    const batchOperationsDiv = document.createElement('div');
+    batchOperationsDiv.style.marginBottom = '10px';
+    batchOperationsDiv.style.display = 'flex';
+    batchOperationsDiv.style.gap = '10px';
+    
+    const selectAllButton = document.createElement('button');
+    selectAllButton.textContent = '全選';
+    selectAllButton.id = 'select-all-btn';
+    selectAllButton.onclick = selectAllQaRows;
+    batchOperationsDiv.appendChild(selectAllButton);
+    
+    const batchDeleteButton = document.createElement('button');
+    batchDeleteButton.textContent = '批次刪除';
+    batchDeleteButton.id = 'batch-delete-button';
+    batchDeleteButton.disabled = selectedQaIds.size === 0;
+    batchDeleteButton.onclick = batchDeleteQaRows;
+    batchOperationsDiv.appendChild(batchDeleteButton);
+    
+    // 添加删除所有按钮
+    const deleteAllButton = document.createElement('button');
+    deleteAllButton.textContent = '刪除所有';
+    deleteAllButton.id = 'delete-all-button';
+    deleteAllButton.onclick = async () => {
+        await deleteAllQaPairs();
+    };
+    batchOperationsDiv.appendChild(deleteAllButton);
+    
+    controlsContainer.appendChild(batchOperationsDiv);
+
     if (!pagination || pagination.total_pages <= 1) {
         return;
     }
@@ -198,23 +270,31 @@ function renderPaginationControls(pagination) {
     const prevButton = document.createElement('button');
     prevButton.textContent = '« 上一頁';
     prevButton.disabled = current_page === 1;
+    prevButton.id = 'prev-page-btn';
     prevButton.onclick = () => loadTrainingDataForTable(activeTable, current_page - 1);
     controlsContainer.appendChild(prevButton);
 
     const pageInfo = document.createElement('span');
     pageInfo.textContent = ` 第 ${current_page} / ${total_pages} 頁 `;
     pageInfo.style.margin = '0 1em';
+    pageInfo.id = 'page-info';
     controlsContainer.appendChild(pageInfo);
 
     const nextButton = document.createElement('button');
     nextButton.textContent = '下一頁 »';
     nextButton.disabled = current_page === total_pages;
+    nextButton.id = 'next-page-btn';
     nextButton.onclick = () => loadTrainingDataForTable(activeTable, current_page + 1);
     controlsContainer.appendChild(nextButton);
 }
 
 async function saveDocumentation() {
-    if (!activeDatasetId || !activeTable) return;
+    if (!activeDatasetId || !activeTable) {
+        if (!activeDatasetId) {
+            alert('請先選擇一個資料集。');
+        }
+        return;
+    }
     
     try {
         const docContent = document.getElementById('doc-input').value;
@@ -238,41 +318,83 @@ function renderQaTable() {
     const tableBody = document.getElementById('qa-table-body');
     tableBody.innerHTML = '';
     
-    if (Array.isArray(currentQaData)) {
-        currentQaData.forEach((item, index) => {
-            const row = tableBody.insertRow();
-            row.dataset.id = item.id || '';
-            
-            const questionCell = row.insertCell();
-            const questionTextarea = document.createElement('textarea');
-            questionTextarea.value = item.question || '';
-            questionCell.appendChild(questionTextarea);
-            
-            const sqlCell = row.insertCell();
-            const sqlPre = document.createElement('pre');
-            sqlPre.contentEditable = 'true';
-            sqlPre.textContent = item.sql || '';
-            sqlCell.appendChild(sqlPre);
-            
-            const actionCell = row.insertCell();
-            const deleteBtn = document.createElement('button');
-            deleteBtn.textContent = '刪除';
-            deleteBtn.onclick = () => {
-                row.remove();
-                const rowIndex = Array.from(tableBody.rows).indexOf(row);
-                if (rowIndex !== -1) {
-                    currentQaData.splice(rowIndex, 1);
-                }
-            };
-            actionCell.appendChild(deleteBtn);
-        });
+    if (!Array.isArray(currentQaData) || currentQaData.length === 0) {
+        return;
     }
+    
+    // 计算分页数据
+    const start_index = (current_page - 1) * items_per_page;
+    const end_index = Math.min(start_index + items_per_page, currentQaData.length);
+    const paginatedData = currentQaData.slice(start_index, end_index);
+    
+    paginatedData.forEach((item, index) => {
+        const row = tableBody.insertRow();
+        row.dataset.id = item.id || '';
+        row.dataset.originalIndex = start_index + index;
+        
+        // 添加复选框单元格
+        const checkboxCell = row.insertCell();
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'qa-checkbox';
+        checkbox.checked = selectedQaIds.has(item.id);
+        checkbox.onchange = function() {
+            if (this.checked) {
+                selectedQaIds.add(item.id);
+            } else {
+                selectedQaIds.delete(item.id);
+            }
+            updateBatchDeleteButton();
+        };
+        checkboxCell.appendChild(checkbox);
+        
+        const questionCell = row.insertCell();
+        const questionTextarea = document.createElement('textarea');
+        questionTextarea.value = item.question || '';
+        questionCell.appendChild(questionTextarea);
+        
+        const sqlCell = row.insertCell();
+        const sqlPre = document.createElement('pre');
+        sqlPre.contentEditable = 'true';
+        sqlPre.textContent = item.sql || '';
+        sqlCell.appendChild(sqlPre);
+        
+        const actionCell = row.insertCell();
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = '刪除';
+        deleteBtn.onclick = () => {
+            row.remove();
+            const originalIndex = parseInt(row.dataset.originalIndex);
+            if (!isNaN(originalIndex)) {
+                currentQaData.splice(originalIndex, 1);
+                selectedQaIds.delete(item.id);
+                updateBatchDeleteButton();
+                // 如果删除后当前页没有数据且不是第一页，则返回上一页
+                if (paginatedData.length === 1 && current_page > 1) {
+                    current_page--;
+                }
+                renderQaTable();
+            }
+        };
+        actionCell.appendChild(deleteBtn);
+    });
+    
+    // 更新批次删除按钮状态
+    updateBatchDeleteButton();
 }
 
 function addQaPairRow(question = '', sql = '') {
     const tableBody = document.getElementById('qa-table-body');
     const row = tableBody.insertRow();
     row.dataset.id = '';
+    
+    // 添加复选框单元格
+    const checkboxCell = row.insertCell();
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'qa-checkbox';
+    checkbox.disabled = true; // 新添加的行默认不能选中
+    checkboxCell.appendChild(checkbox);
 
     const questionCell = row.insertCell();
     const questionTextarea = document.createElement('textarea');
@@ -301,7 +423,12 @@ function addQaPairRow(question = '', sql = '') {
 }
 
 async function saveAllQaModifications() {
-    if (!activeDatasetId || !activeTable) return;
+    if (!activeDatasetId || !activeTable) {
+        if (!activeDatasetId) {
+            alert('請先選擇一個資料集。');
+        }
+        return;
+    }
     
     const tableBody = document.getElementById('qa-table-body');
     let successCount = 0, errorCount = 0;
@@ -309,8 +436,8 @@ async function saveAllQaModifications() {
     try {
         for (const row of tableBody.rows) {
             const id = row.dataset.id;
-            const question = row.cells[0]?.querySelector('textarea')?.value.trim() || '';
-            const sql = row.cells[1]?.querySelector('pre')?.innerText.trim() || '';
+            const question = row.cells[1]?.querySelector('textarea')?.value.trim() || '';
+            const sql = row.cells[2]?.querySelector('pre')?.innerText.trim() || '';
             
             if (!question || !sql) continue;
             
@@ -343,6 +470,153 @@ async function saveAllQaModifications() {
     }
 }
 
+// --- Batch Operations Functions --- 
+function selectAllQaRows() {
+    const tableBody = document.getElementById('qa-table-body');
+    const checkboxes = tableBody.querySelectorAll('input[type="checkbox"]');
+    const isAllSelected = Array.from(checkboxes).every(checkbox => checkbox.checked);
+    
+    selectedQaIds.clear();
+    checkboxes.forEach(checkbox => {
+        checkbox.checked = !isAllSelected;
+        if (!isAllSelected && checkbox.disabled === false) {
+            const row = checkbox.closest('tr');
+            const id = row.dataset.id;
+            if (id) {
+                selectedQaIds.add(id);
+            }
+        }
+    });
+    
+    updateBatchDeleteButton();
+}
+
+function updateBatchDeleteButton() {
+    const batchDeleteButton = document.getElementById('batch-delete-button');
+    if (batchDeleteButton) {
+        batchDeleteButton.disabled = selectedQaIds.size === 0;
+    }
+}
+
+function batchDeleteQaRows() {
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集');
+        return;
+    }
+    
+    if (selectedQaIds.size === 0) {
+        alert('請先選擇要刪除的行');
+        return;
+    }
+    
+    if (confirm(`確定要刪除選中的 ${selectedQaIds.size} 行問答配對嗎？`)) {
+        // 先保存当前页面数据
+        const tableBody = document.getElementById('qa-table-body');
+        const currentPageData = [];
+        
+        for (const row of tableBody.rows) {
+            const id = row.dataset.id;
+            const originalIndex = parseInt(row.dataset.originalIndex);
+            if (!isNaN(originalIndex)) {
+                currentPageData.push({ id, originalIndex });
+            }
+        }
+        
+        // 根据选中的ID删除数据
+        currentPageData.forEach(item => {
+            if (selectedQaIds.has(item.id)) {
+                currentQaData.splice(item.originalIndex, 1);
+            }
+        });
+        
+        selectedQaIds.clear();
+        total_pages = Math.ceil(currentQaData.length / items_per_page);
+        
+        // 如果当前页没有数据了，返回上一页
+        if (currentQaData.length === 0) {
+            current_page = 1;
+        } else if (current_page > total_pages) {
+            current_page = total_pages;
+        }
+        
+        renderQaTable();
+        renderPaginationControls({ current_page: current_page, total_pages: total_pages });
+        updateBatchDeleteButton();
+    }
+}
+
+async function deleteAllQaPairs() {
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集');
+        return;
+    }
+    
+    if (currentQaData.length === 0) {
+        alert('此資料集沒有可刪除的問答配對');
+        return;
+    }
+    
+    if (confirm(`確定要刪除整個資料集的所有問答配對嗎？此操作將永久刪除所有數據且無法撤銷！`)) {
+        try {
+            // 调用API删除整个数据集的所有问答配对
+            await apiFetch('/api/delete_all_qa', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    table_name: activeTable
+                })
+            });
+            
+            // 更新前端状态
+            currentQaData = [];
+            selectedQaIds.clear();
+            current_page = 1;
+            total_pages = 1;
+            
+            // 重新渲染表格和分页控件
+            renderQaTable();
+            renderPaginationControls({ current_page: current_page, total_pages: total_pages });
+            updateBatchDeleteButton();
+            
+            alert('整個資料集的所有問答配對已成功刪除');
+        } catch (error) {
+            console.error('刪除所有問答配對失敗:', error);
+            alert(`刪除失敗: ${error.message}`);
+        }
+    }
+}
+
+// --- File Upload Progress --- 
+function setupFileUploadProgress() {
+    // 为generateQaFromSqlFile函数添加进度更新
+    const originalGenerateQaFromSqlFile = window.generateQaFromSqlFile;
+    window.generateQaFromSqlFile = async function(file) {
+        const progressContainer = document.getElementById('qa-upload-progress-container');
+        const progressBar = document.getElementById('qa-upload-progress-bar');
+        const progressPercentage = document.getElementById('qa-upload-percentage');
+        
+        if (progressContainer && progressBar && progressPercentage) {
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressPercentage.textContent = '0%';
+            
+            try {
+                // 使用原始函数
+                await originalGenerateQaFromSqlFile(file);
+            } finally {
+                // 模拟进度完成
+                progressBar.style.width = '100%';
+                progressPercentage.textContent = '100%';
+                
+                // 延迟后隐藏进度条
+                setTimeout(() => {
+                    progressContainer.style.display = 'none';
+                }, 1000);
+            }
+        }
+    };
+}
+
 async function trainModel() {
     if (!activeDatasetId) {
         alert('請先選擇一個資料集');
@@ -352,11 +626,14 @@ async function trainModel() {
     const trainBtn = document.getElementById('train-model-btn');
     const logContainer = document.getElementById('training-log-container');
     const logOutput = document.getElementById('training-log');
+    const progressBar = document.getElementById('training-progress-bar');
+    const progressText = document.getElementById('training-percentage');
     
     trainBtn.disabled = true;
     trainBtn.textContent = '訓練中...';
     logContainer.style.display = 'block';
-    logOutput.textContent = '準備開始訓練...\n';
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
     
     function addLog(message) {
         logOutput.textContent += message + '\n';
@@ -370,8 +647,8 @@ async function trainModel() {
         const qaTableBody = document.getElementById('qa-table-body');
         const qaPairs = [];
         for (const row of qaTableBody.rows) {
-            const question = row.cells[0]?.querySelector('textarea')?.value.trim();
-            const sql = row.cells[1]?.querySelector('pre')?.innerText.trim();
+            const question = row.cells[1]?.querySelector('textarea')?.value.trim();
+            const sql = row.cells[2]?.querySelector('pre')?.innerText.trim();
             if (question && sql) {
                 qaPairs.push({ question, sql });
             }
@@ -382,9 +659,13 @@ async function trainModel() {
         formData.append('doc', doc);
         formData.append('qa_pairs', JSON.stringify(qaPairs));
 
-        const response = await fetch('/api/train', {
+        const response = await fetch('/api/train', { 
             method: 'POST',
-            body: formData
+            body: formData,
+            // 添加这个头部可以防止浏览器在某些情况下自动刷新
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
         });
 
         if (!response.body) {
@@ -394,11 +675,20 @@ async function trainModel() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         
+        // 用于跟踪问答配对的训练进度
+        let qaProcessed = 0;
+        const totalQaPairs = qaPairs.length;
+        
+        // 用于限制UI更新频率的计数器
+        let updateCounter = 0;
+        
         while (true) {
             const { value, done } = await reader.read();
             
             if (done) {
                 addLog('✅ 訓練流程已完成。');
+                progressBar.style.width = '100%';
+                progressText.textContent = '100%';
                 break;
             }
             
@@ -409,7 +699,26 @@ async function trainModel() {
                         try {
                             const data = JSON.parse(event.substring(6));
                             if(data.message) {
-                                addLog(`[${Math.round(data.percentage)}%] ${data.message}`);
+                                // 特殊处理问答配对训练的进度
+                                if (data.message.includes('問答配對') && totalQaPairs > 0) {
+                                    // 仅当进度百分比变化明显时才更新UI，减少页面跳动
+                                    if (Math.abs(progressBar.style.width.replace('%', '') - Math.round(data.percentage)) > 5 || updateCounter % 3 === 0) {
+                                        progressBar.style.width = `${Math.round(data.percentage)}%`;
+                                        progressText.textContent = `${Math.round(data.percentage)}%`;
+                                    }
+                                 
+                                    // 详细的训练日志只在完成一定数量的问答对后才显示
+                                    if (data.message.includes('訓練完成') || data.message.includes('正在訓練問答配對...') && updateCounter % 5 === 0) {
+                                        addLog(`[${Math.round(data.percentage)}%] ${data.message}`);
+                                    }
+                                } else {
+                                    // 对于其他阶段，正常更新UI
+                                    addLog(`[${Math.round(data.percentage)}%] ${data.message}`);
+                                    progressBar.style.width = `${Math.round(data.percentage)}%`;
+                                    progressText.textContent = `${Math.round(data.percentage)}%`;
+                                }
+                                
+                                updateCounter++;
                             }
                         } catch (jsonError) {
                             console.warn('解析訓練日誌失敗:', jsonError);
@@ -421,9 +730,18 @@ async function trainModel() {
             }
         }
         
+        // 训练完成后的处理 - 只在全部完成后执行一次UI更新
         alert('模型訓練成功！');
         document.getElementById('ask-section').style.display = 'block';
-        analyzeSchema(); // Automatically trigger schema analysis after successful training
+        
+        // 先执行schema分析，再加载数据
+        await analyzeSchema();
+        
+        // 训练完成后，使用当前页面的页码重新加载数据，防止分页重置
+        // 增加延迟时间，确保分析完成后再加载数据
+        setTimeout(() => {
+            loadTrainingDataForTable(activeTable, current_page);
+        }, 800);
         
     } catch (error) {
         const errorMessage = '訓練失敗：' + error.message;
@@ -826,7 +1144,14 @@ function setupEventListeners() {
     // 数据表选择器变化
     const tableSelector = document.getElementById('table-selector');
     if (tableSelector) {
-        tableSelector.addEventListener('change', (e) => loadTrainingDataForTable(e.target.value));
+        tableSelector.addEventListener('change', (e) => {
+            if (!activeDatasetId) {
+                alert('請先選擇一個資料集。');
+                tableSelector.value = 'global'; // 恢复到默认值
+                return;
+            }
+            loadTrainingDataForTable(e.target.value);
+        });
     }
     
     // 新增数据集表单提交
@@ -1031,8 +1356,16 @@ async function generateQaFromSqlFile(file) {
 
     const logContainer = document.getElementById('qa-gen-log-container');
     const logOutput = document.getElementById('qa-gen-log');
+    const progressContainer = document.getElementById('qa-upload-progress-container');
+    const progressBar = document.getElementById('qa-upload-progress-bar');
+    const progressPercentage = document.getElementById('qa-upload-percentage');
     
     logContainer.style.display = 'block';
+    if (progressContainer && progressBar && progressPercentage) {
+        progressContainer.style.display = 'block';
+        progressBar.style.width = '0%';
+        progressPercentage.textContent = '0%';
+    }
     logOutput.textContent = '準備從 SQL 檔案生成問答配對...\n';
 
     function addLog(message) {
@@ -1050,11 +1383,17 @@ async function generateQaFromSqlFile(file) {
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
+        let processedQueries = 0;
+        let totalQueries = 0;
 
         while (true) {
             const { value, done } = await reader.read();
             if (done) {
                 addLog('✅ 所有問答配對已生成完畢。');
+                if (progressContainer && progressBar && progressPercentage) {
+                    progressBar.style.width = '100%';
+                    progressPercentage.textContent = '100%';
+                }
                 break;
             }
 
@@ -1065,10 +1404,21 @@ async function generateQaFromSqlFile(file) {
                 if (event.startsWith('data: ')) {
                     try {
                         const data = JSON.parse(event.substring(6));
-                        if (data.status === 'progress' && data.qa_pair) {
+                        if (data.status === 'starting') {
+                            totalQueries = data.total;
+                            addLog(`找到 ${totalQueries} 個 SQL 查詢語句。`);
+                        } else if (data.status === 'progress' && data.qa_pair) {
+                            processedQueries++;
                             addQaPairRow(data.qa_pair.question, data.qa_pair.sql);
-                        } else {
-                            addLog(data.message || JSON.stringify(data));
+                            
+                            // 更新进度条
+                            if (totalQueries > 0 && progressContainer && progressBar && progressPercentage) {
+                                const percentage = Math.round((processedQueries / totalQueries) * 100);
+                                progressBar.style.width = `${percentage}%`;
+                                progressPercentage.textContent = `${percentage}%`;
+                            }
+                        } else if (data.message) {
+                            addLog(data.message);
                         }
                     } catch (e) {
                         console.warn('Failed to parse stream data chunk:', e);
@@ -1082,11 +1432,23 @@ async function generateQaFromSqlFile(file) {
         console.error('An error occurred during QA generation from SQL file:', error);
         addLog(`❌ 錯誤: ${error.message}`);
         alert(`從 SQL 檔案生成問答配對失敗: ${error.message}`);
+    } finally {
+        // 延迟后隐藏进度条
+        if (progressContainer) {
+            setTimeout(() => {
+                progressContainer.style.display = 'none';
+            }, 1000);
+        }
     }
 }
 
 // --- Documentation Generation ---
 async function generateAndDisplayDocumentation() {
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集。');
+        return;
+    }
+
     const ddl = document.getElementById('ddl-input').value;
     if (!ddl) {
         console.warn("No DDL content found to generate documentation.");
@@ -1117,6 +1479,31 @@ async function generateAndDisplayDocumentation() {
     }
 }
 
+function addQaPairRow(question = '', sql = '') {
+    // 将新的问答对添加到当前页的开头
+    const newItem = { question, sql };
+    const currentStartIndex = (current_page - 1) * items_per_page;
+    currentQaData.splice(currentStartIndex, 0, newItem);
+    
+    // 如果添加新行后当前页超过了每页的数量限制，需要重新计算分页
+    total_pages = Math.ceil(currentQaData.length / items_per_page);
+    
+    renderQaTable();
+    renderPaginationControls({ current_page: current_page, total_pages: total_pages });
+    
+    // 自动选中新添加的行
+    setTimeout(() => {
+        const tableBody = document.getElementById('qa-table-body');
+        if (tableBody.rows.length > 0) {
+            const firstRow = tableBody.rows[0];
+            const questionTextarea = firstRow.cells[1]?.querySelector('textarea');
+            if (questionTextarea) {
+                questionTextarea.focus();
+            }
+        }
+    }, 100);
+}
+
 // --- File Upload Handlers ---
 function handleDocFileUpload(event) {
     const file = event.target.files[0];
@@ -1133,6 +1520,11 @@ function handleDocFileUpload(event) {
 
 // --- Schema Analysis ---
 async function analyzeSchema() {
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集。');
+        return;
+    }
+
     const outputDiv = document.getElementById('schema-analysis-output');
     const analyzeBtn = document.getElementById('analyze-schema-btn');
     
@@ -1321,6 +1713,11 @@ async function savePrompt(event) {
 
 // 删除提示词
 async function deletePrompt(promptId, promptName) {
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集');
+        return;
+    }
+    
     if (!confirm(`確定要刪除提示詞 "${promptName}" 嗎？`)) {
         return;
     }
@@ -1342,6 +1739,11 @@ async function deletePrompt(promptId, promptName) {
 
 // 重置提示词为默认值
 async function resetPromptToDefault(promptId, promptName) {
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集');
+        return;
+    }
+    
     if (!confirm(`確定要將提示詞 "${promptName}" 重置為默認值嗎？`)) {
         return;
     }
@@ -1369,9 +1771,10 @@ function setupPromptEventListeners() {
     }
 }
 
-// 修改初始化函数，添加提示词相关事件监听器
+// 修改初始化函数，添加提示词相关事件监听器和上传进度条
 function init() {
     setupEventListeners();
     setupPromptEventListeners();
+    setupFileUploadProgress();
     loadDatasets();
 }

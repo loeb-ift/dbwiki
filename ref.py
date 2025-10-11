@@ -1232,9 +1232,9 @@ def generate_qa_from_sql():
 
     def stream_qa_generation(sql_content):
         user_id = session['username']
-        dataset_id = session.get('active_dataset_id')
+        dataset_id = session.get('active_dataset')
         if not dataset_id:
-            yield f"data: {json.dumps({'status': 'error', 'message': 'No active dataset selected.'})}\n\n"
+            yield f"data: {json.dumps({'status': 'error', 'message': '未选择活跃的数据集，请先选择一个数据集。'})}\n\n"
             return
 
         try:
