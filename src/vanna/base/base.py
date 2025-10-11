@@ -2086,24 +2086,30 @@ class VannaBase(ABC):
 
             fig = ldict.get("fig", None)
         except Exception as e:
+            self.log(f"LLM-generated Plotly code failed to execute: {e}", title="Warning")
+            self.log("Activating fallback chart generation strategy.", title="Info")
+
             # Inspect data types
             numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
             categorical_cols = df.select_dtypes(
                 include=["object", "category"]
             ).columns.tolist()
+            
+            self.log(f"Detected {len(numeric_cols)} numeric columns: {numeric_cols}", title="Debug")
+            self.log(f"Detected {len(categorical_cols)} categorical columns: {categorical_cols}", title="Debug")
 
             # Decision-making for plot type
             if len(numeric_cols) >= 2:
-                # Use the first two numeric columns for a scatter plot
+                self.log("Strategy: Found >= 2 numeric columns. Using Scatter Plot.", title="Info")
                 fig = px.scatter(df, x=numeric_cols[0], y=numeric_cols[1])
             elif len(numeric_cols) == 1 and len(categorical_cols) >= 1:
-                # Use a bar plot if there's one numeric and one categorical column
+                self.log("Strategy: Found 1 numeric and >= 1 categorical column. Using Bar Chart.", title="Info")
                 fig = px.bar(df, x=categorical_cols[0], y=numeric_cols[0])
             elif len(categorical_cols) >= 1 and df[categorical_cols[0]].nunique() < 10:
-                # Use a pie chart for categorical data with fewer unique values
+                self.log("Strategy: Found >= 1 categorical column with < 10 unique values. Using Pie Chart.", title="Info")
                 fig = px.pie(df, names=categorical_cols[0])
             else:
-                # Default to a simple line plot if above conditions are not met
+                self.log("Strategy: Defaulting to Line Plot.", title="Info")
                 fig = px.line(df)
 
         if fig is None:

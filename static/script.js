@@ -1195,6 +1195,8 @@ async function ask() {
     const analysisOutput = document.getElementById('analysis-output');
     const sqlContainer = document.getElementById('sql-container');
     const sqlOutput = document.getElementById('sql-output');
+    const chartContainer = document.getElementById('chart-container');
+    const chartOutput = document.getElementById('chart-output');
     const resultContainer = document.getElementById('result-container');
     const resultOutput = document.getElementById('result-output');
 
@@ -1205,8 +1207,10 @@ async function ask() {
     analysisContainer.style.display = 'none';
     analysisOutput.innerHTML = '';
     sqlContainer.style.display = 'none';
+    chartContainer.style.display = 'none';
     resultContainer.style.display = 'none';
     sqlOutput.textContent = '';
+    chartOutput.innerHTML = '';
     resultOutput.textContent = '';
     lastGeneratedSql = '';
 
@@ -1261,6 +1265,15 @@ async function ask() {
                                 lastGeneratedSql = data.sql;
                                 sqlOutput.textContent = lastGeneratedSql;
                                 sqlContainer.style.display = 'block';
+                            }
+                            if (data.plotly_json) {
+                                try {
+                                    const plotly_data = JSON.parse(data.plotly_json);
+                                    Plotly.newPlot('chart-output', plotly_data.data, plotly_data.layout);
+                                    chartContainer.style.display = 'block';
+                                } catch (e) {
+                                    console.error("無法渲染 Plotly 圖表:", e);
+                                }
                             }
                             if (data.df_json) {
                                 try {

@@ -86,10 +86,27 @@ def ask_question():
                 write_ask_log(user_id, "load_training_data_error", str(e))
 
             similar_qa = vn.get_similar_question_sql(question=question)
+            # -- DEBUG LOGGING START --
+            log_message = f"Found {len(similar_qa)} similar QA pairs."
+            if similar_qa:
+                log_message += f" Top match: {similar_qa[0]['question']} with score {similar_qa[0].get('similarity', 'N/A')}"
+            vn.log(log_message, "DEBUG")
+            write_ask_log(user_id, "debug_similar_qa", log_message)
+            # -- DEBUG LOGGING END --
             related_ddl = vn.get_related_ddl(question=question)
             related_docs = vn.get_related_documentation(question=question)
+
+            # -- FIX: Prioritize exact matches from training data --
+            sql = None
+            if similar_qa and similar_qa[0].get('similarity', 0) > 0.95:
+                sql = similar_qa[0]['sql']
+                vn.log(f"Found a high-confidence match in training data. Using pre-existing SQL.", "Info")
+                write_ask_log(user_id, "using_trained_sql", f"Using trained SQL for question: {similar_qa[0]['question']}")
             
-            sql = vn.generate_sql(question=question)
+            if sql is None:
+                vn.log(f"No high-confidence match found. Generating new SQL with LLM.", "Info")
+                sql = vn.generate_sql(question=question)
+
             write_ask_log(user_id, "generated_sql", sql)  # 记录生成的SQL
 
             if re.match(r'^\s*WITH\s+.*?\)\s*$', sql, re.DOTALL | re.IGNORECASE):
@@ -115,7 +132,51 @@ def ask_question():
                 vn.log(log_message, "警告")
                 vn.log_queue.put({'type': 'warning', 'message': log_message, 'sql': sql})
                 write_ask_log(user_id, "empty_sql_result", f"SQL query returned empty result: {sql}")
-        
+            
+            # 新增：生成 Plotly 圖表
+            plotly_json = None
+            try:
+                fig = None
+                if not df.empty:
+                    vn.log("正在生成 Plotly 圖表程式碼...", "資訊")
+                    plotly_code = vn.generate_plotly_code(question=question, sql=sql, df_metadata=f"Running df.dtypes gives:\n {df.dtypes}")
+                    write_ask_log(user_id, "generated_plotly_code", plotly_code)
+
+                    vn.log("正在執行 Plotly 程式碼以生成圖表...", "資訊")
+                    fig = vn.get_plotly_figure(plotly_code=plotly_code, df=df)
+                
+                if fig:
+                    plotly_json = fig.to_json()
+                    vn.log("成功生成 Plotly 圖表 JSON。", "資訊")
+                    write_ask_log(user_id, "generated_plotly_json_success", "Plotly JSON generated.")
+                else:
+                    # 如果沒有圖表（因為 df 為空或生成失敗），則創建一個空的圖表
+                    vn.log("未能生成 Plotly 圖表物件或資料為空，將創建一個空的圖表。", "警告")
+                    import plotly.graph_objects as go
+                    fig = go.Figure()
+                    fig.update_layout(
+                        title_text="無資料可供顯示",
+                        xaxis={"visible": False},
+                        yaxis={"visible": False},
+                        annotations=[
+                            {
+                                "text": "查詢結果為空，無法生成圖表。",
+                                "xref": "paper",
+                                "yref": "paper",
+                                "showarrow": False,
+                                "font": {
+                                    "size": 16
+                                }
+                            }
+                        ]
+                    )
+                    plotly_json = fig.to_json()
+                    write_ask_log(user_id, "empty_plotly_chart_created", "An empty chart was created as a placeholder.")
+
+            except Exception as e:
+                vn.log(f"生成 Plotly 圖表時出錯: {e}", "錯誤")
+                write_ask_log(user_id, "plotly_generation_error", str(e))
+
             analysis_result = None
             try:
                 ask_analysis_prompt_template = load_prompt_template('ask_analysis_prompt.txt')
@@ -182,6 +243,7 @@ def ask_question():
                 'type': 'result',
                 'sql': sql,
                 'df_json': df.to_json(orient='records'),
+                'plotly_json': plotly_json,  # 新增 plotly_json
                 'similar_qa_details': similar_qa_details,
                 'ddl_details': ddl_details,
                 'doc_details': doc_details,

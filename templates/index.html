@@ -168,7 +168,11 @@
                     <h3>生成的 SQL：</h3>
                     <pre id="sql-output"></pre>
                 </div>
-                <div id="result-container" style="display: none;">
+                <div id="chart-container" style="display: none; margin-top: 1.5em;">
+                    <h3>視覺化圖表：</h3>
+                    <div id="chart-output"></div>
+                </div>
+                <div id="result-container" style="display: none; margin-top: 1.5em;">
                     <h3>查詢結果：</h3>
                     <pre id="result-output"></pre>
                 </div>
@@ -255,6 +259,7 @@
         </div>
     </div>
 
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="/static/script.js"></script>
 </body>
