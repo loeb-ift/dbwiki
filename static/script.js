@@ -322,15 +322,12 @@ function renderQaTable() {
         return;
     }
     
-    // 计算分页数据
-    const start_index = (current_page - 1) * items_per_page;
-    const end_index = Math.min(start_index + items_per_page, currentQaData.length);
-    const paginatedData = currentQaData.slice(start_index, end_index);
-    
-    paginatedData.forEach((item, index) => {
+    // 后端已经处理了分页，直接使用 currentQaData
+    currentQaData.forEach((item, index) => {
         const row = tableBody.insertRow();
         row.dataset.id = item.id || '';
-        row.dataset.originalIndex = start_index + index;
+        // The originalIndex should be based on the current page and index
+        row.dataset.originalIndex = (current_page - 1) * items_per_page + index;
         
         // 添加复选框单元格
         const checkboxCell = row.insertCell();

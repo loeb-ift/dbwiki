@@ -1,0 +1,24 @@
+[
+  {
+    "batch": 1,
+    "item": 1,
+    "question": "請列出各城市的總銷售額、與全體平均銷售額的差異及佔平均的百分比，並按銷售額遞減排序。",
+    "original_sql": "WITH CitySales AS (\n    SELECT City, SUM(\"Sales\") AS total_sales\n    FROM SuperMarket_Analysis\n    GROUP BY City\n),\nAverageCitySales AS (\n    SELECT AVG(total_sales) AS overall_avg_sales\n    FROM CitySales\n)\nSELECT cs.City,\n       cs.total_sales,\n       acs.overall_avg_sales,\n       (cs.total_sales - acs.overall_avg_sales) AS sales_difference,\n       (cs.total_sales * 100.0 / acs.overall_avg_sales) AS percentage_of_avg\nFROM CitySales cs, AverageCitySales acs\nORDER BY cs.total_sales DESC",
+    "generated_sql": "WITH AllData AS (\n    SELECT City, \"Sales\" AS Sales FROM SuperMarket_Analysis_part1\n    UNION ALL\n    SELECT City, \"Sales\" FROM SuperMarket_Analysis_part2\n    UNION ALL\n    SELECT City, \"Sales\" FROM SuperMarket_Analysis_part3\n),\nCitySales AS (\n    SELECT City,\n           SUM(Sales) AS total_sales\n    FROM AllData\n    GROUP BY City\n),\nOverallAvg AS (\n    SELECT AVG(total_sales) AS overall_avg_sales\n    FROM CitySales\n)\nSELECT cs.City,\n       cs.total_sales,\n       (cs.total_sales - oa.overall_avg_sales) AS sales_difference_from_avg,\n       (cs.total_sales / oa.overall_avg_sales * 100.0) AS pct_of_avg\nFROM CitySales cs\nCROSS JOIN OverallAvg oa\nORDER BY cs.total_sales DESC;",
+    "is_success": true,
+    "reason": "SQL匹配成功，关键词相似度: 0.78",
+    "execution_time": 16.73472785949707,
+    "timestamp": "2025-10-12T01:46:38.303404"
+  },
+  {
+    "batch": 1,
+    "item": 2,
+    "question": "各分店的平均顧客評分及排名為何？",
+    "original_sql": "SELECT Branch,\n       AVG(Rating) AS avg_rating,\n       RANK() OVER (ORDER BY AVG(Rating) DESC) AS rating_rank\nFROM SuperMarket_Analysis\nGROUP BY Branch\nORDER BY avg_rating DESC",
+    "generated_sql": "WITH AllData AS (\n    SELECT Branch, Rating FROM SuperMarket_Analysis_part1\n    UNION ALL\n    SELECT Branch, Rating FROM SuperMarket_Analysis_part2\n    UNION ALL\n    SELECT Branch, Rating FROM SuperMarket_Analysis_part3\n),\nAvgRatingPerBranch AS (\n    SELECT Branch, AVG(Rating) AS avg_rating\n    FROM AllData\n    GROUP BY Branch\n)\nSELECT Branch,\n       avg_rating,\n       RANK() OVER (ORDER BY avg_rating DESC) AS rating_rank\nFROM AvgRatingPerBranch\nORDER BY rating_rank;",
+    "is_success": true,
+    "reason": "SQL匹配成功，关键词相似度: 0.93",
+    "execution_time": 25.213496685028076,
+    "timestamp": "2025-10-12T01:47:05.519242"
+  }
+]

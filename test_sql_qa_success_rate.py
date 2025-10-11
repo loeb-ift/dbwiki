@@ -11,6 +11,7 @@ from datetime import datetime
 import pandas as pd
 from app.core.vanna_core import get_vanna_instance, configure_vanna_for_request
 from app.core.helpers import write_ask_log
+from app.vanna_wrapper import MyVanna
 
 # 加载.env文件中的环境变量
 try:
@@ -62,13 +63,26 @@ class SQLQATester:
         self.results_log_file = os.path.join(self.log_dir, f"test_results_{self.timestamp}.json")
     
     def initialize_vanna(self):
-        """初始化并配置Vanna实例"""
+        """初始化Vanna实例"""
         try:
-            print(f"正在初始化Vanna实例，用户ID: {self.user_id}")
-            self.vanna_instance = get_vanna_instance(self.user_id)
-            print("Vanna实例创建成功，正在配置数据库连接...")
-            self.vanna_instance = configure_vanna_for_request(self.vanna_instance, self.user_id, self.dataset_id)
-            print("Vanna实例配置完成")
+            # 创建MyVanna实例
+            self.vanna_instance = MyVanna(
+                user_id=self.user_id,
+            )
+            
+            # 配置数据集
+            print(f"正在配置数据集: {self.dataset_id}")
+            from app.vanna_wrapper import configure_vanna_for_request
+            self.vanna_instance = configure_vanna_for_request(
+                self.vanna_instance, 
+                self.user_id, 
+                self.dataset_id
+            )
+            
+            # 尝试连接数据库以验证配置是否正确
+            if not hasattr(self.vanna_instance, 'run_sql_is_set') or not self.vanna_instance.run_sql_is_set:
+                print("无法连接到数据库")
+                return False
             
             # 训练DDL语句
             print("正在加载并训练DDL语句...")
@@ -96,6 +110,7 @@ class SQLQATester:
                 # 如果没有提供Documentation文件路径，尝试从数据库中加载
                 self.load_docs_from_db()
             
+            print(f"Vanna实例初始化成功，用户ID: {self.user_id}，数据集ID: {self.dataset_id}")
             return True
         except Exception as e:
             print(f"初始化Vanna实例失败: {str(e)}")
@@ -108,7 +123,7 @@ class SQLQATester:
             cursor = conn.cursor()
             
             # 查询training_ddl表
-            cursor.execute("SELECT ddl_content FROM training_ddl")
+            cursor.execute("SELECT ddl_statement FROM training_ddl")
             rows = cursor.fetchall()
             
             if rows:
@@ -130,7 +145,7 @@ class SQLQATester:
             cursor = conn.cursor()
             
             # 查询training_documentation表
-            cursor.execute("SELECT content FROM training_documentation")
+            cursor.execute("SELECT documentation_text FROM training_documentation")
             rows = cursor.fetchall()
             
             if rows:
@@ -152,7 +167,7 @@ class SQLQATester:
             cursor = conn.cursor()
             
             # 查询training_qa表，限制最大数量
-            cursor.execute("SELECT question, sql FROM training_qa LIMIT ?", (max_pairs,))
+            cursor.execute("SELECT question, sql_query FROM training_qa LIMIT ?", (max_pairs,))
             rows = cursor.fetchall()
             
             conn.close()
@@ -469,7 +484,7 @@ class SQLQATester:
 if __name__ == "__main__":
     # 配置测试参数 - 使用user1的test_1008_0931数据集
     user_id = "user1"
-    dataset_id = "test_1008_0931"
+    dataset_id = "1"  # 使用数字ID而不是名称
     
     # 用户训练数据库路径
     db_path = os.path.join(os.path.dirname(__file__), "user_data", f"training_data_{user_id}.sqlite")
