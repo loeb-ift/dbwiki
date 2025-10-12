@@ -81,38 +81,9 @@ def write_ask_log(user_id: str, log_type: str, content: str):
         # 如果创建上下文失败，至少确保文件已经写入
         print(f"Ask log written to: {file_path}")
 
-def _get_all_ask_logs(user_id: str) -> dict:
-    log_dir = os.path.join(os.getcwd(), 'ask_log')
-    if not os.path.exists(log_dir):
-        return {}
-
-    all_logs = {}
-    for filename in os.listdir(log_dir):
-        if filename.startswith(f"{user_id}_") and filename.endswith(".log"):
-            # 正确解析文件名，提取日志类型
-            # 文件名格式: {user_id}_{log_type}_{timestamp}.log
-            # 使用正则表达式匹配而不是简单的split
-            import re
-            # 修改正则表达式以支持log_type中包含下划线
-            pattern = r"^{}_(.+?)_\d+\.log$".format(user_id)
-            match = re.match(pattern, filename)
-            if match:
-                log_type = match.group(1)
-                
-                file_path = os.path.join(log_dir, filename)
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        all_logs.setdefault(log_type, []).append(content)
-                except Exception as e:
-                    try:
-                        from app import app as flask_app
-                        with flask_app.app_context():
-                            flask_app.logger.error(f"Error reading log file {filename}: {e}")
-                    except (ImportError, RuntimeError):
-                        print(f"Error reading log file {filename}: {e}")
-    
-    return {log_type: "\n".join(contents) for log_type, contents in all_logs.items()}
+# This function is deprecated after refactoring the dynamic prompt generation in ask.py
+# def _get_all_ask_logs(user_id: str) -> dict:
+#     ...
 
 def _delete_all_ask_logs(user_id: str):
     log_dir = os.path.join(os.getcwd(), 'ask_log')

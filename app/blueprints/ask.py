@@ -133,17 +133,36 @@ def ask_question():
             analysis_result = None
             try:
                 ask_analysis_prompt_template = load_prompt_template('analysis')
-                all_logs_content = _get_all_ask_logs(user_id)
-                formatted_similar_qa = all_logs_content.get("get_similar_question_sql_results", "無")
+
+                def format_similar_qa_as_markdown(qa_list):
+                    if not qa_list:
+                        return "無"
+                    header = "| 相似問題 | 相關 SQL 範例 |\n|---|---|\n"
+                    rows = [f"| {item.get('question', '')} | ```sql\n{item.get('sql', '')}\n``` |" for item in qa_list]
+                    return header + "\n".join(rows)
+
+                def format_ddl_as_markdown(ddl_list):
+                    if not ddl_list:
+                        return "無"
+                    return f"```sql\n{''.join(ddl_list)}\n```"
                 
+                def format_docs_as_markdown(doc_list):
+                    if not doc_list:
+                        return "無"
+                    return "\n---\n".join(doc_list)
+
+                formatted_similar_qa = format_similar_qa_as_markdown(similar_qa)
+                formatted_ddl = format_ddl_as_markdown(related_ddl)
+                formatted_docs = format_docs_as_markdown(related_docs)
+
                 dynamic_prompt_content = ask_analysis_prompt_template.replace(
                     "[用戶提出的原始自然語言問題]", question
                 ).replace(
                     "[列出檢索到的相似問題和 SQL 範例]", formatted_similar_qa
                 ).replace(
-                    "[列出檢索到的相關 DDL 語句]", all_logs_content.get("get_related_ddl_results", "無")
+                    "[列出檢索到的相關 DDL 語句]", formatted_ddl
                 ).replace(
-                    "[列出檢索到的相關業務文件內容]", all_logs_content.get("get_related_documentation_results", "無")
+                    "[列出檢索到的相關業務文件內容]", formatted_docs
                 )
 
                 # 保存動態提示詞到歷史紀錄

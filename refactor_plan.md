@@ -1,67 +1,92 @@
-# 視覺化流程重構計畫
+# Dynamic Prompt Generation Refactor Plan
 
-## 1. 現況分析
+## 1. Objective
 
-目前的系統在處理使用者提問時，後端會生成並執行 SQL 查詢，然後將查詢結果 (DataFrame) 以 JSON 格式傳送到前端。前端接收到資料後，僅將其渲染成一個靜態的 HTML 表格。
+To refactor the dynamic prompt generation logic in `app/blueprints/ask.py`. The current implementation relies on reading from filesystem logs (`ask_log/`), which is fragile and couples the logic too tightly with a temporary file-based data passing mechanism.
 
-這個流程並未充分利用 Vanna 核心庫中強大的圖表生成能力 (`generate_plotly_code` 和 `get_plotly_figure`)。視覺化的責任完全被忽略了。
+The goal is to make the process more robust, maintainable, and independent of the filesystem by using structured data directly within the application's memory.
 
-## 2. 重構目標
+## 2. Current Architecture & Problems
 
-將視覺化生成的責任從前端轉移回後端，以充分利用現有的 `vanna` 圖表生成邏輯。前端將專注於渲染由後端準備好的互動式圖表和資料表格。
+- **Data Flow**: `ask` function calls Vanna methods (`get_similar_question_sql`, etc.) -> Vanna methods write their results to individual log files in `ask_log/` -> `ask` function then calls `_get_all_ask_logs` to read and aggregate these same log files -> The aggregated string content is then injected into a prompt template via simple string replacement.
+- **Problems**:
+    - **Fragility**: Relies on file I/O, which can fail. Prone to race conditions in a multi-threaded environment.
+    - **Low Cohesion**: The logic for generating context and consuming it is disconnected via the filesystem.
+    - **Tight Coupling**: The `ask` function is tightly coupled to the specific file naming and content format of the logs created by `write_ask_log` and aggregated by `_get_all_ask_logs`.
+    - **Inefficiency**: Writing to and reading from disk is less efficient than passing data in memory.
+    - **Poor Readability**: String replacement on a large template is hard to read and maintain.
 
-## 3. 流程設計
+## 3. Proposed Refactoring
 
-### 3.1 現有流程
+### 3.1. Core Idea
 
-```mermaid
-sequenceDiagram
-    participant F as 前端 (script.js)
-    participant B as 後端 (ask.py)
-    participant V as Vanna 核心
+The `run_vanna_in_thread` function in `ask.py` already retrieves the necessary context as structured Python objects:
+- `similar_qa` (a list of dictionaries)
+- `related_ddl` (a list of strings)
+- `related_docs` (a list of strings)
 
-    F->>B: POST /api/ask (問題)
-    B->>V: generate_sql(問題)
-    V-->>B: SQL 查詢
-    B->>V: run_sql(SQL)
-    V-->>B: DataFrame
-    B->>F: SSE: { type: 'result', df_json: ... }
-    F->>F: renderResultTable(df_json)
-```
+We will use these variables **directly** to build the final prompt, completely bypassing the `ask_log` filesystem dependency for this part of the logic.
 
-### 3.2 計畫流程
+### 3.2. Implementation Steps
 
-```mermaid
-sequenceDiagram
-    participant F as 前端 (script.js)
-    participant B as 後端 (ask.py)
-    participant V as Vanna 核心
+1.  **Modify `app/blueprints/ask.py`**:
+    - In `run_vanna_in_thread`, locate the section where `dynamic_prompt_content` is created (around line 139).
+    - **Remove the call to `_get_all_ask_logs`**.
+    - Create new helper functions (or inline logic) within `ask.py` to format the context variables into Markdown strings:
+        - `format_similar_qa_as_markdown(similar_qa)`: This will take the list of QA dictionaries and return a Markdown table string.
+        - `format_ddl_as_markdown(related_ddl)`: This will take the list of DDL strings and wrap them in a single ` ```sql ` code block.
+        - `format_docs_as_markdown(related_docs)`: This will concatenate the list of documentation strings.
+    - Use these formatted strings to populate the `ask_analysis_prompt_template`. An f-string is recommended for clarity.
 
-    F->>B: POST /api/ask (問題)
-    B->>V: generate_sql(問題)
-    V-->>B: SQL 查詢
-    B->>V: run_sql(SQL)
-    V-->>B: DataFrame
-    B->>V: generate_plotly_code(df)
-    V-->>B: Plotly Python 程式碼
-    B->>V: get_plotly_figure(程式碼, df)
-    V-->>B: Plotly 圖表物件 (fig)
-    B->>B: fig.to_json()
-    B->>F: SSE: { type: 'result', df_json: ..., plotly_json: ... }
-    F->>F: Plotly.newPlot('chart-div', plotly_json)
-    F->>F: renderResultTable(df_json)
-```
+    ```python
+    # Example of the new logic in ask.py
 
-## 4. 實施步驟
+    # ... after retrieving similar_qa, related_ddl, related_docs ...
 
-1.  **修改後端 `app/blueprints/ask.py`**:
-    *   在 `run_vanna_in_thread` 函式中，執行 `run_sql` 之後。
-    *   新增呼叫 `vn.generate_plotly_code()` 和 `vn.get_plotly_figure()`。
-    *   將生成的 Plotly 圖表物件轉換為 JSON (`fig.to_json()`)。
-    *   在傳送給前端的 `result` 事件中，加入 `plotly_json` 欄位。
+    def format_similar_qa_as_markdown(qa_list):
+        if not qa_list:
+            return "無"
+        header = "| 相似問題 | 相關 SQL 範例 |\n|---|---|\n"
+        rows = [f"| {item.get('question', '')} | ```sql\n{item.get('sql', '')}\n``` |" for item in qa_list]
+        return header + "\n".join(rows)
 
-2.  **修改前端 `static/script.js`**:
-    *   在 `index.html` 中新增一個用於顯示圖表的 `<div>` 容器 (例如 `<div id="chart-output"></div>`)。
-    *   在 `ask()` 函式中，當接收到 `result` 事件時，檢查是否存在 `plotly_json`。
-    *   如果存在，使用 `Plotly.newPlot('chart-output', JSON.parse(data.plotly_json))` 來渲染圖表。
-    *   確保在 `index.html` 中引入 Plotly.js 函式庫。
+    def format_ddl_as_markdown(ddl_list):
+        if not ddl_list:
+            return "無"
+        return f"```sql\n{''.join(ddl_list)}\n```"
+    
+    def format_docs_as_markdown(doc_list):
+        if not doc_list:
+            return "無"
+        return "\n---\n".join(doc_list)
+
+    ask_analysis_prompt_template = load_prompt_template('analysis')
+
+    formatted_similar_qa = format_similar_qa_as_markdown(similar_qa)
+    formatted_ddl = format_ddl_as_markdown(related_ddl)
+    formatted_docs = format_docs_as_markdown(related_docs)
+
+    dynamic_prompt_content = ask_analysis_prompt_template.replace(
+        "[用戶提出的原始自然語言問題]", question
+    ).replace(
+        "[列出檢索到的相似問題和 SQL 範例]", formatted_similar_qa
+    ).replace(
+        "[列出檢索到的相關 DDL 語句]", formatted_ddl
+    ).replace(
+        "[列出檢索到的相關業務文件內容]", formatted_docs
+    )
+
+    # ... rest of the function ...
+    ```
+
+2.  **Deprecate `_get_all_ask_logs` in `app/core/helpers.py`**:
+    - Since this function's primary consumer (`ask.py`) no longer needs it, it can be considered for removal.
+    - For safety, we can first mark it with a `# DEPRECATED` comment. After verifying the new implementation works, it can be removed in a subsequent cleanup commit.
+    - The `write_ask_log` and `_delete_all_ask_logs` functions should be kept, as they are still useful for general-purpose debugging and cleanup.
+
+## 4. Benefits
+
+- **Decoupling**: The prompt generation logic is no longer dependent on the filesystem logging implementation.
+- **Robustness**: Eliminates potential I/O errors and race conditions.
+- **Clarity**: The data flow is contained within a single function, making it much easier to understand and debug.
+- **Maintainability**: Using helper functions and direct variable manipulation is cleaner than string replacement based on external file content.
