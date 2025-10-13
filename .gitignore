@@ -26,3 +26,4 @@ milvus.db
 /temp_vanna_data/
 /ask_log/
 /prompt_history/
+test_logs/

@@ -1,0 +1,61 @@
+2025-10-12 20:57:12,379 - __main__ - INFO - 当前工作目录: /Users/loeb/LAB/dbwiki
+2025-10-12 20:57:12,380 - __main__ - INFO - Python版本: 3.12.8 (v3.12.8:2dc476bcb91, Dec  3 2024, 14:43:19) [Clang 13.0.0 (clang-1300.0.29.30)]
+2025-10-12 20:57:12,380 - __main__ - INFO - 用户数据集目录: /Users/loeb/LAB/dbwiki/user_data/datasets
+2025-10-12 20:57:12,380 - __main__ - INFO - === 开始数据集上传诊断测试 ===
+2025-10-12 20:57:12,380 - __main__ - INFO - 
+--- 测试1: 直接调用文件处理函数 ---
+2025-10-12 20:57:12,380 - __main__ - INFO - 开始直接测试文件上传功能 (用户: user1)...
+2025-10-12 20:57:12,380 - __main__ - INFO - 尝试导入应用模块...
+2025-10-12 20:57:12,989 - __main__ - ERROR - 导入应用模块失败: cannot import name 'get_dataset_id_from_name' from 'app.blueprints.datasets' (/Users/loeb/LAB/dbwiki/app/blueprints/datasets.py)
+2025-10-12 20:57:12,989 - __main__ - ERROR - 请检查项目依赖和Python路径配置
+2025-10-12 20:57:12,989 - __main__ - INFO - 
+--- 测试2: 检查目录权限 ---
+2025-10-12 20:57:12,989 - __main__ - INFO - 目录 'user_data/datasets' 是否可写: True
+2025-10-12 20:57:12,989 - __main__ - INFO - 成功创建测试文件: user_data/datasets/permission_test.txt
+2025-10-12 20:57:12,989 - __main__ - INFO - 成功删除测试文件
+2025-10-12 20:57:12,989 - __main__ - INFO - 
+--- 测试3: 检查用户数据表结构 ---
+2025-10-12 20:57:12,990 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 20:57:12,990 - __main__ - INFO - datasets表存在
+2025-10-12 20:57:12,990 - __main__ - INFO - datasets表列: ['id', 'dataset_name', 'db_path', 'created_at']
+2025-10-12 20:57:12,990 - __main__ - INFO - datasets表包含dataset_id列: False
+2025-10-12 20:57:12,990 - __main__ - INFO - 
+=== 诊断测试完成，请查看日志文件获取详细信息 ===
+2025-10-12 20:57:12,990 - __main__ - INFO - 
+===== 诊断测试完成，但有失败项 =====
+2025-10-12 21:01:57,433 - __main__ - INFO - 当前工作目录: /Users/loeb/LAB/dbwiki
+2025-10-12 21:01:57,434 - __main__ - INFO - Python版本: 3.12.8 (v3.12.8:2dc476bcb91, Dec  3 2024, 14:43:19) [Clang 13.0.0 (clang-1300.0.29.30)]
+2025-10-12 21:01:57,434 - __main__ - INFO - 用户数据集目录: /Users/loeb/LAB/dbwiki/user_data/datasets
+2025-10-12 21:01:57,434 - __main__ - INFO - === 开始数据集上传诊断测试 ===
+2025-10-12 21:01:57,434 - __main__ - INFO - 
+--- 测试1: 直接调用文件处理函数 ---
+2025-10-12 21:01:57,434 - __main__ - INFO - 开始直接测试文件上传功能 (用户: user1)...
+2025-10-12 21:01:57,434 - __main__ - INFO - 尝试导入应用模块...
+2025-10-12 21:01:57,939 - __main__ - INFO - 成功导入应用模块
+2025-10-12 21:01:57,941 - __main__ - INFO - 创建了包含 3 行的模拟CSV文件
+2025-10-12 21:01:57,941 - __main__ - INFO - 检查用户 'user1' 的数据库连接...
+2025-10-12 21:01:57,941 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 21:01:57,942 - __main__ - INFO - 用户 'user1' 有 3 个现有数据集
+2025-10-12 21:01:57,943 - __main__ - INFO - 成功创建测试数据集，ID: 12
+2025-10-12 21:01:57,952 - __main__ - INFO - 成功将测试数据写入SQLite数据库
+2025-10-12 21:01:57,952 - __main__ - INFO - 数据表中的记录数量: 3
+2025-10-12 21:01:57,952 - __main__ - INFO - 已删除测试数据库文件
+2025-10-12 21:01:57,952 - __main__ - INFO - 已从数据库移除测试数据集记录
+2025-10-12 21:01:57,953 - __main__ - INFO - 
+--- 测试2: 检查目录权限 ---
+2025-10-12 21:01:57,953 - __main__ - INFO - 目录 'user_data/datasets' 是否可写: True
+2025-10-12 21:01:57,953 - __main__ - INFO - 成功创建测试文件: user_data/datasets/permission_test.txt
+2025-10-12 21:01:57,953 - __main__ - INFO - 成功读取测试文件内容: Permission test
+2025-10-12 21:01:57,953 - __main__ - INFO - 成功删除测试文件
+2025-10-12 21:01:57,953 - __main__ - INFO - 
+--- 测试3: 检查用户数据表结构 ---
+2025-10-12 21:01:57,953 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 21:01:57,953 - __main__ - INFO - datasets表存在
+2025-10-12 21:01:57,953 - __main__ - INFO - datasets表列: ['id', 'dataset_name', 'db_path', 'created_at']
+2025-10-12 21:01:57,953 - __main__ - INFO - datasets表包含id列: True
+2025-10-12 21:01:57,953 - __main__ - INFO - datasets表中的记录数量: 3
+2025-10-12 21:01:57,953 - __main__ - INFO - datasets表示例数据: [(9, 'test_1012_2038'), (10, 'Test Dataset'), (11, 'test_diagnostic_dataset')]
+2025-10-12 21:01:57,953 - __main__ - INFO - 
+=== 诊断测试完成，请查看日志文件获取详细信息 ===
+2025-10-12 21:01:57,954 - __main__ - INFO - 
+===== 诊断测试成功完成 =====

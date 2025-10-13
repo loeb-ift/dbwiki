@@ -1,0 +1,52 @@
+2025-10-12 20:46:55,585 - __main__ - INFO - Successfully imported application modules
+2025-10-12 20:46:55,585 - __main__ - INFO - Starting dataset creation diagnostic test
+2025-10-12 20:46:55,587 - __main__ - INFO - Simulated login for user 'user1'
+2025-10-12 20:46:55,588 - __main__ - INFO - Attempting to create dataset 'test_diagnostic_dataset' for user 'user1'
+2025-10-12 20:46:55,588 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 20:46:55,589 - __main__ - INFO - Successfully connected to user1's database
+2025-10-12 20:46:55,589 - __main__ - INFO - Running migration check directly...
+2025-10-12 20:46:55,589 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 20:46:55,589 - __main__ - INFO - Migration check completed successfully
+2025-10-12 20:46:55,590 - __main__ - INFO - API response status: 400
+2025-10-12 20:46:55,590 - __main__ - INFO - API response data: {"message":"Dataset name and files are required.","status":"error"}
+
+2025-10-12 20:46:55,590 - __main__ - INFO - Dataset creation succeeded unexpectedly
+2025-10-12 20:46:55,590 - __main__ - INFO - Diagnostic test completed. Check dataset_upload_diagnostic.log for details.
+2025-10-12 20:48:56,531 - __main__ - INFO - Successfully imported application modules
+2025-10-12 20:48:56,531 - __main__ - INFO - Starting dataset creation diagnostic test
+2025-10-12 20:48:56,534 - __main__ - INFO - Simulated login for user 'user1'
+2025-10-12 20:48:56,535 - __main__ - INFO - Attempting to create dataset 'test_diagnostic_dataset' for user 'user1'
+2025-10-12 20:48:56,536 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 20:48:56,537 - __main__ - INFO - Successfully connected to user1's database
+2025-10-12 20:48:56,537 - __main__ - INFO - Running migration check directly...
+2025-10-12 20:48:56,537 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 20:48:56,537 - __main__ - INFO - Migration check completed successfully
+2025-10-12 20:48:56,537 - __main__ - DEBUG - Preparing API call with dataset_name: test_diagnostic_dataset and file: test_data.csv
+2025-10-12 20:48:56,537 - __main__ - ERROR - API call failed: EnvironBuilder.__init__() got an unexpected keyword argument 'files'
+2025-10-12 20:48:56,538 - __main__ - INFO - Diagnostic test completed. Check dataset_upload_diagnostic.log for details.
+2025-10-12 20:50:40,200 - __main__ - INFO - Successfully imported application modules
+2025-10-12 20:50:40,200 - __main__ - INFO - Starting database and dataset upload diagnostic test
+2025-10-12 20:50:40,200 - __main__ - INFO - Checking file permissions...
+2025-10-12 20:50:40,200 - __main__ - INFO - Directory 'user_data' exists with permissions: 755
+2025-10-12 20:50:40,200 - __main__ - INFO - Directory 'user_data/datasets' exists with permissions: 755
+2025-10-12 20:50:40,200 - __main__ - INFO - Directory 'user_data/chroma_db' exists with permissions: 755
+2025-10-12 20:50:40,200 - __main__ - INFO - Checking database for user 'user1'...
+2025-10-12 20:50:40,200 - __main__ - INFO - User database path: /Users/loeb/LAB/dbwiki/user_data/training_data_user1.sqlite
+2025-10-12 20:50:40,200 - __main__ - INFO - Database file exists with permissions: 644
+2025-10-12 20:50:40,201 - __main__ - INFO - Datasets table exists in user database
+2025-10-12 20:50:40,201 - __main__ - INFO - User has 2 existing datasets
+2025-10-12 20:50:40,202 - __main__ - INFO - Datasets table columns: ['id', 'dataset_name', 'db_path', 'created_at']
+2025-10-12 20:50:40,202 - __main__ - INFO - Testing migration function directly for user 'user1'...
+2025-10-12 20:50:40,202 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 20:50:40,202 - __main__ - INFO - Successfully connected to user database
+2025-10-12 20:50:40,202 - __main__ - INFO - Running migration check directly...
+2025-10-12 20:50:40,202 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 20:50:40,203 - __main__ - INFO - Migration check completed successfully
+2025-10-12 20:50:40,203 - __main__ - INFO - Simulating dataset creation steps for user 'user1'...
+2025-10-12 20:50:40,203 - __main__ - INFO - Generated database path: user_data/datasets/b6882e1f73e84a5992dc29e049fa8e12.sqlite
+2025-10-12 20:50:40,203 - __main__ - INFO - Created directories for database path
+2025-10-12 20:50:40,209 - __main__ - INFO - Successfully created SQLAlchemy engine for: user_data/datasets/b6882e1f73e84a5992dc29e049fa8e12.sqlite
+2025-10-12 20:50:40,213 - __main__ - INFO - Successfully created test table in new database
+2025-10-12 20:50:40,213 - app.core.db_utils - INFO - Running migration check for existing database of user 'user1'.
+2025-10-12 20:50:40,213 - __main__ - INFO - Successfully registered dataset with ID: 11
+2025-10-12 20:50:40,213 - __main__ - INFO - Diagnostic test completed. Check dataset_upload_diagnostic.log for details.

@@ -3,36 +3,6 @@ import json
 import pandas as pd
 from datetime import datetime
 
-# 从数据库加载提示模板
-def load_prompt_template(db_path, prompt_type):
-    import sqlite3
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT content FROM training_examples WHERE example_type = ?", (prompt_type,))
-    result = cursor.fetchone()
-    
-    conn.close()
-    
-    if result:
-        return result[0]
-    
-    # 如果数据库中没有，从文件系统加载
-    prompts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'prompts')
-    filename_map = {
-        'ask_analysis_prompt': 'ask_analysis_prompt.txt',
-        'documentation_prompt': 'documentation_prompt.txt',
-        'qa_generation_system_prompt': 'qa_generation_system_prompt.txt'
-    }
-    
-    if prompt_type in filename_map:
-        filepath = os.path.join(prompts_dir, filename_map[prompt_type])
-        if os.path.exists(filepath):
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return f.read()
-    
-    return None
-
 # 写入日志文件
 def write_log(filename, content):
     log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')

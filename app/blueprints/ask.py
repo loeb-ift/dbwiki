@@ -5,11 +5,13 @@ import os
 import pandas as pd
 import traceback
 import threading
-from flask import Blueprint, request, session, jsonify, Response, stream_with_context
+import logging
 from sqlalchemy.exc import OperationalError
 
 from app.vanna_wrapper import get_vanna_instance, configure_vanna_for_request, MyVanna
-from app.core.helpers import load_prompt_template, _get_all_ask_logs, _delete_all_ask_logs, write_ask_log
+from app.core.helpers import load_prompt_template, _delete_all_ask_logs, write_ask_log
+
+logger = logging.getLogger(__name__)
 
 ask_bp = Blueprint('ask', __name__, url_prefix='/api/ask')
 
@@ -28,216 +30,137 @@ def ask_question():
     vn_instance = get_vanna_instance(user_id)
     dataset_id = session.get('active_dataset')
 
+    # 在執行 Vanna 邏輯的線程中運行
     def run_vanna_in_thread(vn_instance: MyVanna, question: str, dataset_id: str, user_id: str):
-        try:
-            # 记录请求开始
-            write_ask_log(user_id, "request_start", f"Starting question processing: {question}")
-            
-            vn = configure_vanna_for_request(vn_instance, user_id, dataset_id)
-        
-            # The following block is removed as it incorrectly re-trains data from a temp file on every ask.
-            # The correct approach is to rely on the already trained data in the vector database.
-            # The training should happen separately in the training section of the application.
-            similar_qa = vn.get_similar_question_sql(question=question)
-            # -- DEBUG LOGGING START --
-            log_message = f"Found {len(similar_qa)} similar QA pairs."
-            if similar_qa:
-                log_message += f" Top match: {similar_qa[0]['question']} with score {similar_qa[0].get('similarity', 'N/A')}"
-            vn.log(log_message, "DEBUG")
-            write_ask_log(user_id, "debug_similar_qa", log_message)
-            # -- DEBUG LOGGING END --
-            related_ddl = vn.get_related_ddl(question=question)
-            related_docs = vn.get_related_documentation(question=question)
-
-            # -- FIX: Prioritize exact matches from training data --
-            sql = None
-            if similar_qa and similar_qa[0].get('similarity', 0) > 0.95:
-                sql = similar_qa[0]['sql']
-                vn.log(f"Found a high-confidence match in training data. Using pre-existing SQL.", "Info")
-                write_ask_log(user_id, "using_trained_sql", f"Using trained SQL for question: {similar_qa[0]['question']}")
-            
-            if sql is None:
-                vn.log(f"No high-confidence match found. Generating new SQL with LLM.", "Info")
-                sql = vn.generate_sql(question=question)
-
-            write_ask_log(user_id, "generated_sql", sql)  # 记录生成的SQL
-
-            if re.match(r'^\s*WITH\s+.*?\)\s*$', sql, re.DOTALL | re.IGNORECASE):
-                cte_match = re.match(r'^\s*WITH\s+(\w+)\s+AS\s+\(', sql, re.DOTALL | re.IGNORECASE)
-                if cte_match:
-                    cte_name = cte_match.group(1)
-                    sql = f"{sql}\nSELECT * FROM {cte_name};"
-                    vn.log(f"檢測到不完整的 WITH 語句，已嘗試修正為: {sql}", "警告")
-
+        # 由於應用上下文對於線程是局部的，我們需要在線程內部導入應用以確保其存在
+        from app import app as flask_app
+        with flask_app.app_context():
             try:
-                df = vn.run_sql(sql=sql)
-            except OperationalError as e:
-                if "no such table" in str(e):
-                    vn.log(f"SQL 執行被跳過，因為找不到資料表。", "警告")
-                else:
-                    vn.log(f"SQL 執行失敗: {e}", "錯誤")
-                df = pd.DataFrame()
-                write_ask_log(user_id, "sql_execution_error", str(e))
-        
-            if df.empty:
-                # 增强日志记录，确保SQL查询返回空结果的信息被正确记录
-                log_message = f"SQL 查询 '{sql}' 返回空结果，尝试修正SQL..."
-                vn.log(log_message, "警告")
-                vn.log_queue.put({'type': 'warning', 'message': log_message, 'sql': sql})
-                write_ask_log(user_id, "empty_sql_result", f"SQL query returned empty result: {sql}")
-            
-            # 新增：生成 Plotly 圖表
-            plotly_json = None
-            try:
-                fig = None
-                if not df.empty:
-                    vn.log("正在生成 Plotly 圖表程式碼...", "資訊")
-                    plotly_code = vn.generate_plotly_code(question=question, sql=sql, df_metadata=f"Running df.dtypes gives:\n {df.dtypes}")
-                    write_ask_log(user_id, "generated_plotly_code", plotly_code)
-
-                    vn.log("正在執行 Plotly 程式碼以生成圖表...", "資訊")
-                    fig = vn.get_plotly_figure(plotly_code=plotly_code, df=df)
+                # 記錄請求開始
+                write_ask_log(user_id, "request_start", f"Starting question processing: {question}")
                 
-                if fig:
-                    plotly_json = fig.to_json()
-                    vn.log("成功生成 Plotly 圖表 JSON。", "資訊")
-                    write_ask_log(user_id, "generated_plotly_json_success", "Plotly JSON generated.")
-                else:
-                    # 如果沒有圖表（因為 df 為空或生成失敗），則創建一個空的圖表
-                    vn.log("未能生成 Plotly 圖表物件或資料為空，將創建一個空的圖表。", "警告")
-                    import plotly.graph_objects as go
-                    fig = go.Figure()
-                    fig.update_layout(
-                        title_text="無資料可供顯示",
-                        xaxis={"visible": False},
-                        yaxis={"visible": False},
-                        annotations=[
-                            {
-                                "text": "查詢結果為空，無法生成圖表。",
-                                "xref": "paper",
-                                "yref": "paper",
-                                "showarrow": False,
-                                "font": {
-                                    "size": 16
-                                }
-                            }
-                        ]
-                    )
-                    plotly_json = fig.to_json()
-                    write_ask_log(user_id, "empty_plotly_chart_created", "An empty chart was created as a placeholder.")
+                vn = configure_vanna_for_request(vn_instance, user_id, dataset_id)
+        
+                # 1. Retrieve context and stream it to the frontend
+                similar_qa = vn.get_similar_question_sql(question=question)
+                if similar_qa:
+                    vn_instance.log_queue.put({'type': 'retrieved_context', 'subtype': 'qa', 'content': similar_qa})
 
-            except Exception as e:
-                vn.log(f"生成 Plotly 圖表時出錯: {e}", "錯誤")
-                write_ask_log(user_id, "plotly_generation_error", str(e))
+                related_ddl = vn.get_related_ddl(question=question)
+                if related_ddl:
+                    vn_instance.log_queue.put({'type': 'retrieved_context', 'subtype': 'ddl', 'content': related_ddl})
 
-            analysis_result = None
-            try:
-                ask_analysis_prompt_template = load_prompt_template('analysis')
+                related_docs = vn.get_related_documentation(question=question)
+                if related_docs:
+                    vn_instance.log_queue.put({'type': 'retrieved_context', 'subtype': 'documentation', 'content': related_docs})
 
-                def format_similar_qa_as_markdown(qa_list):
-                    if not qa_list:
-                        return "無"
-                    header = "| 相似問題 | 相關 SQL 範例 |\n|---|---|\n"
-                    rows = [f"| {item.get('question', '')} | ```sql\n{item.get('sql', '')}\n``` |" for item in qa_list]
-                    return header + "\n".join(rows)
-
-                def format_ddl_as_markdown(ddl_list):
-                    if not ddl_list:
-                        return "無"
-                    return f"```sql\n{''.join(ddl_list)}\n```"
+                # 2. Perform the analysis step
+                vn_instance.log_queue.put({'type': 'info', 'content': "正在請求 LLM 進行綜合分析..."})
                 
-                def format_docs_as_markdown(doc_list):
-                    if not doc_list:
-                        return "無"
-                    return "\n---\n".join(doc_list)
+                # Format context for the analysis prompt
+                similar_qa_str = "\n".join([f"Question: {qa['question']}\nSQL: {qa['sql']}" for qa in similar_qa]) if similar_qa else "無"
+                related_ddl_str = "\n".join(related_ddl) if related_ddl else "無"
+                related_docs_str = "\n".join(related_docs) if related_docs else "無"
 
-                formatted_similar_qa = format_similar_qa_as_markdown(similar_qa)
-                formatted_ddl = format_ddl_as_markdown(related_ddl)
-                formatted_docs = format_docs_as_markdown(related_docs)
-
-                dynamic_prompt_content = ask_analysis_prompt_template.replace(
-                    "[用戶提出的原始自然語言問題]", question
-                ).replace(
-                    "[列出檢索到的相似問題和 SQL 範例]", formatted_similar_qa
-                ).replace(
-                    "[列出檢索到的相關 DDL 語句]", formatted_ddl
-                ).replace(
-                    "[列出檢索到的相關業務文件內容]", formatted_docs
-                )
-
-                # 保存動態提示詞到歷史紀錄
                 try:
-                    import time
-                    prompt_history_dir = os.path.join(os.getcwd(), 'prompt_history')
-                    os.makedirs(prompt_history_dir, exist_ok=True)
-                    timestamp = int(time.time())
-                    prompt_filename = f"{user_id}_dynamic_prompt_{timestamp}.txt"
-                    prompt_filepath = os.path.join(prompt_history_dir, prompt_filename)
-                    with open(prompt_filepath, 'w', encoding='utf-8') as f:
-                        f.write(dynamic_prompt_content)
-                    try:
-                        from app import app as flask_app
-                        with flask_app.app_context():
-                            flask_app.logger.info(f"Dynamic prompt saved to history: {prompt_filepath}")
-                    except (ImportError, RuntimeError):
-                        print(f"Dynamic prompt saved to history: {prompt_filepath}")
-                    write_ask_log(user_id, "dynamic_prompt_saved", f"Prompt saved to: {prompt_filepath}")
-                except Exception as e:
-                    try:
-                        from app import app as flask_app
-                        with flask_app.app_context():
-                            flask_app.logger.error(f"Error saving dynamic prompt to history: {e}")
-                    except (ImportError, RuntimeError):
-                        print(f"Error saving dynamic prompt to history: {e}")
-                    write_ask_log(user_id, "save_prompt_error", str(e))
+                    analysis_prompt_template = vn.get_prompt('analysis')
+                except Exception:
+                    analysis_prompt_template = "請根據以下信息，為生成 SQL 提供一個詳細的思考過程分析表。\n"
 
-                vn.log("正在將思考過程發送給 Ollama 進行分析...", "資訊")
-                analysis_result = vn.submit_prompt([{'role': 'user', 'content': dynamic_prompt_content}])
-                vn.log("Ollama 分析完成。", "資訊")
-                write_ask_log(user_id, "ollama_analysis_result", str(analysis_result))  # 记录Ollama的分析结果
+                analysis_prompt_content = f"""
+                原始問題: {question}
+                檢索到的相似問題與 SQL 範例: {similar_qa_str}
+                檢索到的相關資料庫結構 (DDL): ```sql\n{related_ddl_str}\n```
+                檢索到的相關業務文件: {related_docs_str}
+                """
+                full_analysis_prompt = analysis_prompt_template + analysis_prompt_content
+                
+                analysis_result = vn.submit_prompt([{'role': 'user', 'content': full_analysis_prompt}])
+                vn_instance.log_queue.put({'type': 'explanation', 'content': analysis_result})
 
-                # 不删除日志，保留以便调试和分析
-                # _delete_all_ask_logs(user_id)
+                # 3. Generate SQL
+                sql = None
+                if similar_qa and similar_qa[0].get('similarity', 0) > 0.95:
+                    sql = similar_qa[0]['sql']
+                    vn_instance.log_queue.put({'type': 'info', 'content': f"找到高度相似的已存問題，直接使用其 SQL。"})
+                else:
+                    vn_instance.log_queue.put({'type': 'info', 'content': "正在請求 LLM 生成新的 SQL..."})
+                    sql_generator = vn.generate_sql(question=question, allow_gpt_oss_to_see_logs=True)
+                    sql = "".join(sql_generator)
+                
+                vn_instance.log_queue.put({'type': 'sql', 'content': sql})
+                write_ask_log(user_id, "generated_sql", sql)
+
+                if re.match(r'^[\s]*WITH[\s]+.*?[\)][\s]*$', sql, re.DOTALL | re.IGNORECASE):
+                    cte_match = re.match(r'^[\s]*WITH[\s]+(\w+)[\s]+AS[\s]+\([\s]*', sql, re.DOTALL | re.IGNORECASE)
+                    if cte_match:
+                        cte_name = cte_match.group(1)
+                        sql = f"{sql}\nSELECT * FROM {cte_name};"
+                        vn.log(f"檢測到不完整的 WITH 語句，已嘗試修正為: {sql}", "警告")
+
+                try:
+                    df = vn.run_sql(sql=sql)
+                except OperationalError as e:
+                    if "no such table" in str(e):
+                        vn.log(f"SQL 執行被跳過，因為找不到資料表。", "警告")
+                    else:
+                        vn.log(f"SQL 執行失敗: {e}", "錯誤")
+                    df = pd.DataFrame()
+                    write_ask_log(user_id, "sql_execution_error", str(e))
+
+                if not df.empty:
+                    vn_instance.log_queue.put({'type': 'df', 'content': df.to_json(orient='split', date_format='iso')})
+                else:
+                    vn_instance.log_queue.put({'type': 'message', 'content': 'SQL查詢返回空結果。'})
+                
+                chart_code = vn.generate_plotly_code(question=question, sql=sql, df=df)
+                if chart_code:
+                    vn_instance.log_queue.put({'type': 'chart', 'content': chart_code})
+                
+                # The new analysis step already provides an explanation.
+                # The call to generate_explanatory_sql is redundant and has been removed.
+                
+                followup_questions = vn.generate_followup_questions(question=question, sql=sql, df=df, user_id=user_id)
+                if followup_questions:
+                    vn_instance.log_queue.put({'type': 'followup_questions', 'content': followup_questions})
+                
+                vn_instance.log_queue.put({'type': 'complete'})
+
+                write_ask_log(user_id, "request_end", "Question processing completed successfully.")
 
             except Exception as e:
-                vn.log(f"生成、發送給 Ollama 或保存動態提示詞時出錯: {e}", "錯誤")
-                write_ask_log(user_id, "analysis_error", str(e))
-        
-            logs = []
-            while not vn.log_queue.empty():
-                logs.append(vn.log_queue.get())
-        
-            similar_qa_details = [log['details'] for log in logs if log['step'] == '相似問題檢索完成']
-            ddl_details = [log['details'] for log in logs if log['step'] == 'DDL 檢索完成']
-            doc_details = [log['details'] for log in logs if log['step'] == '文件檢索完成']
-        
-            vn_instance.log_queue.put({
-                'type': 'result',
-                'sql': sql,
-                'df_json': df.to_json(orient='records'),
-                'plotly_json': plotly_json,  # 新增 plotly_json
-                'similar_qa_details': similar_qa_details,
-                'ddl_details': ddl_details,
-                'doc_details': doc_details,
-                'analysis_result': analysis_result
-            })
-            write_ask_log(user_id, "request_complete", "Question processing completed")
-        except Exception as e:
-            error_msg = f"Processing error: {str(e)}"
-            vn_instance.log_queue.put({'type': 'error', 'message': error_msg, 'traceback': traceback.format_exc()})
-            write_ask_log(user_id, "request_error", error_msg)
-        finally:
-            vn_instance.log_queue.put(None)
+                error_type = type(e).__name__
+                error_msg = str(e)
+                full_traceback = traceback.format_exc()
+                logger.error(f"Exception in run_vanna_in_thread: {full_traceback}")
+                
+                # Ensure log_queue is accessible for error logging
+                if hasattr(vn_instance, 'log_queue'):
+                    vn_instance.log_queue.put({'type': 'error', 'message': error_msg, 'traceback': full_traceback})
+                else:
+                    logger.error(f"MyVanna instance has no log_queue attribute when trying to log error: {error_msg}")
+                
+            finally:
+                if hasattr(vn_instance, 'log_queue'):
+                    vn_instance.log_queue.put(None) # 發送終止信號
+                else:
+                    logger.error("MyVanna instance has no log_queue attribute when trying to send termination signal.")
 
     def stream_logs():
         vanna_thread = threading.Thread(target=run_vanna_in_thread, args=(vn_instance, question, dataset_id, user_id))
         vanna_thread.start()
 
+        chunk_count = 0
+        total_chars = 0
         while True:
             item = vn_instance.log_queue.get()
             if item is None:
                 break
-            yield f"data: {json.dumps(item)}\n\n"
+            payload = json.dumps(item)
+            total_chars += len(payload)
+            chunk_count += 1
+            yield f"data: {payload}\n\n"
+        logger.info(f"Ask SSE stream: parts={chunk_count}, total_chars={total_chars}, avg_size={(total_chars/chunk_count) if chunk_count else 0:.1f}")
         
         vanna_thread.join()
 

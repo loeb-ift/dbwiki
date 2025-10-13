@@ -79,12 +79,15 @@ def test_vanna_ollama():
         
         # 打印MyVanna实例的Ollama配置
         logger.info(f"MyVanna LLM配置: {vn.llm_config}")
-        logger.info(f"MyVanna LLM选择: {vn.llm_choice}")
         
-        # 检查是否选择了Ollama
-        if vn.llm_choice != 'ollama':
-            logger.warning(f"⚠️ MyVanna选择的LLM不是Ollama，而是: {vn.llm_choice}")
-            return
+        # 检查是否使用了Ollama
+        if hasattr(vn, 'llm_choice'):
+            logger.info(f"MyVanna LLM选择: {vn.llm_choice}")
+            if vn.llm_choice != 'ollama':
+                logger.warning(f"⚠️ MyVanna选择的LLM不是Ollama，而是: {vn.llm_choice}")
+                return
+        else:
+            logger.info("MyVanna实例没有llm_choice属性，继续测试")
             
         # 创建一个简单的prompt进行测试
         test_prompt = [

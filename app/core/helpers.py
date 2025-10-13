@@ -4,65 +4,68 @@ from sqlalchemy import create_engine, inspect, text
 
 from .db_utils import get_user_db_connection
 
-def load_prompt_template(prompt_type: str):
+def load_prompt_template(prompt_type: str, user_id: str = None):
     """
-    Loads a prompt template from the database based on its type.
-    It prioritizes user-specific prompts over global ones.
-    The prompt name is no longer used as a hardcoded identifier.
+    Loads a prompt template from the database. If not found, it attempts to
+    insert the default prompt and then retries.
     """
+    from flask import session
+    from app import app as flask_app
+    from app.blueprints.prompts import get_default_prompt_content
+
+    if user_id is None:
+        user_id = session.get('username', 'system') # Fallback to a system-level user
+
     try:
-        from flask import session
-        from app import app as flask_app
-        
-        user_id = session.get('username')
-
-        if not user_id:
-            # This case should ideally not happen for logged-in users,
-            # but as a fallback, we can try to get any global prompt of that type.
-            with get_user_db_connection('system') as conn: # Or a generic connection
-                 cursor = conn.cursor()
-                 cursor.execute(
-                    "SELECT prompt_content FROM training_prompts WHERE prompt_type = ? AND is_global = 1 LIMIT 1",
-                    (prompt_type,)
-                 )
-                 result = cursor.fetchone()
-                 if result:
-                     flask_app.logger.info(f"Loaded global prompt of type '{prompt_type}' for unauthenticated user.")
-                     return result[0]
-
-        # For logged-in users
         with get_user_db_connection(user_id) as conn:
             cursor = conn.cursor()
-            # First, try to find a user-specific (is_global=0) prompt of this type
+            
+            # Attempt to load the prompt
             cursor.execute(
-                "SELECT prompt_content FROM training_prompts WHERE prompt_type = ? AND is_global = 0",
+                "SELECT prompt_content FROM training_prompts WHERE prompt_type = ? ORDER BY is_global ASC",
                 (prompt_type,)
             )
             result = cursor.fetchone()
+
             if result:
-                flask_app.logger.info(f"Loaded user-specific prompt for type '{prompt_type}' for user '{user_id}'")
                 return result[0]
 
-            # If not found, fall back to a global prompt of this type
-            cursor.execute(
-                "SELECT prompt_content FROM training_prompts WHERE prompt_type = ? AND is_global = 1",
-                (prompt_type,)
-            )
-            result = cursor.fetchone()
-            if result:
-                flask_app.logger.info(f"Loaded global prompt for type '{prompt_type}' for user '{user_id}'")
-                return result[0]
+            # If not found, try to insert the default and reload
+            flask_app.logger.warning(f"Prompt '{prompt_type}' not found for user '{user_id}'. Attempting to insert default.")
+            
+            default_content = get_default_prompt_content(prompt_type)
+            if not default_content:
+                raise FileNotFoundError(f"Default prompt for '{prompt_type}' not found in JSON file.")
 
+            try:
+                prompt_name = f"{prompt_type}_prompt"
+                description = "Default prompt inserted on-demand."
+                cursor.execute(
+                    "INSERT INTO training_prompts (prompt_name, prompt_content, prompt_type, prompt_description, is_global) VALUES (?, ?, ?, ?, ?)",
+                    (prompt_name, default_content, prompt_type, description, 1)
+                )
+                conn.commit()
+                flask_app.logger.info(f"Inserted default prompt for '{prompt_type}'.")
+                return default_content
+            except conn.IntegrityError:
+                # Race condition: another thread inserted it. Retry loading.
+                flask_app.logger.info(f"Default prompt for '{prompt_type}' was inserted by another process. Retrying load.")
+                cursor.execute(
+                    "SELECT prompt_content FROM training_prompts WHERE prompt_type = ? AND is_global = 1",
+                    (prompt_type,)
+                )
+                result = cursor.fetchone()
+                if result:
+                    return result[0]
+                raise
     except Exception as e:
-        try:
-            from app import app as flask_app
-            with flask_app.app_context():
-                flask_app.logger.error(f"Failed to load prompt of type '{prompt_type}' from database: {e}")
-        except (ImportError, RuntimeError):
-            print(f"Failed to load prompt of type '{prompt_type}' from database: {e}")
+        flask_app.logger.error(f"Error in load_prompt_template for '{prompt_type}': {e}", exc_info=True)
+        raise
 
-    # If no prompt is found in the database, raise an error.
-    raise FileNotFoundError(f"Prompt of type '{prompt_type}' not found in the database.")
+    raise FileNotFoundError(f"Unable to load or create prompt of type '{prompt_type}'.")
+
+# The insert_default_prompt function is now obsolete and has been removed.
+# The new load_prompt_template function handles on-demand prompt creation.
 
 def write_ask_log(user_id: str, log_type: str, content: str):
     log_dir = os.path.join(os.getcwd(), 'ask_log')
@@ -121,7 +124,8 @@ def get_dataset_tables(user_id, dataset_id):
     try:
         engine = create_engine(f'sqlite:///{db_path}')
         inspector = inspect(engine)
-        table_names = inspector.get_table_names()
+        # 确保返回的是标准Python列表
+        table_names = list(inspector.get_table_names())
         
         ddl_statements = []
         with engine.connect() as connection:

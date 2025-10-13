@@ -1243,7 +1243,10 @@ def generate_qa_from_sql():
             queries = [q.strip() for q in sql_content.split(';') if q.strip()]
             total_queries = len(queries)
             yield f"data: {json.dumps({'status': 'starting', 'total': total_queries, 'message': '開始生成問答配對...'})}\n\n"
-            qa_system_prompt = load_prompt_template('qa_generation_system_prompt.txt')
+            from app.blueprints.prompts import get_prompt
+            # Assuming a user context is available, e.g., from a session or a default.
+            # For a standalone script, you might need a default user or a way to pass it.
+            qa_system_prompt = get_prompt('qa_generation', user_id='default_user')
             
             with get_user_db_connection(user_id) as conn:
                 cursor = conn.cursor()

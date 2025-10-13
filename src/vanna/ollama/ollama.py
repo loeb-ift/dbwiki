@@ -6,7 +6,6 @@ from httpx import Timeout
 from ..base import VannaBase
 from ..exceptions import DependencyError
 
-
 class Ollama(VannaBase):
   def __init__(self, config=None):
 
@@ -14,7 +13,7 @@ class Ollama(VannaBase):
       ollama = __import__("ollama")
     except ImportError:
       raise DependencyError(
-        "You need to install required dependencies to execute this method, run command:"
+        "You need to install required dependencies to execute this method, run command:" 
         " \npip install ollama"
       )
 
@@ -71,7 +70,7 @@ class Ollama(VannaBase):
     # Regular expression to find ```sql' and capture until '```'
     sql = re.search(r"```sql\n((.|\n)*?)(?=;|\[|```)", llm_response, re.DOTALL)
     # Regular expression to find 'select, with (ignoring case) and capture until ';', [ (this happens in case of mistral) or end of string
-    select_with = re.search(r'(select|(with.*?as \())(.*?)(?=;|\[|```)',
+    select_with = re.search(r'(select|(with.*?as \())((.|\n)*?)(?=;|\[|```)',
                             llm_response,
                             re.IGNORECASE | re.DOTALL)
     if sql:
@@ -86,44 +85,59 @@ class Ollama(VannaBase):
       return llm_response
 
   def submit_prompt(self, prompt, **kwargs) -> str:
-    self.log(
-      f"Ollama parameters:\n"
-      f"model={self.model},\n"
-      f"options={self.ollama_options},\n"
-      f"keep_alive={self.keep_alive}")
-    
-    # 确保所有消息的content字段都是字符串类型
-    if isinstance(prompt, list):
-        for i, message in enumerate(prompt):
-            if isinstance(message, dict) and 'content' in message:
-                if isinstance(message['content'], list):
-                    # 如果content是列表，将其转换为字符串
-                    prompt[i]['content'] = "".join(str(item) for item in message['content'])
-                elif not isinstance(message['content'], str):
-                    # 如果content不是字符串，将其转换为字符串
-                    prompt[i]['content'] = str(message['content'])
-    
-    self.log(f"Prompt Content:\n{json.dumps(prompt, ensure_ascii=False)}")
-    response_dict = self.ollama_client.chat(model=self.model,
-                                            messages=prompt,
-                                            stream=False,
-                                            options=self.ollama_options,
-                                            keep_alive=self.keep_alive)
+      stream = kwargs.get('stream', False)
 
-    self.log(f"Ollama Response:\n{str(response_dict)}")
-    
-    # 确保content始终是字符串类型
-    content = response_dict['message']['content']
-    if isinstance(content, list):
-        # 如果content是列表，将其转换为字符串
-        content = "".join(str(item) for item in content)
-    elif not isinstance(content, str):
-        # 如果content不是字符串，将其转换为字符串
-        content = str(content)
-    
-    # 檢查 LLM 回應是否與輸入提示詞相同
-    if isinstance(prompt, list) and len(prompt) > 0 and prompt[0].get('content') == content:
-        self.log(f"Ollama Response is identical to the prompt. Returning a default message.", title="Warning")
-        return "Ollama 模型未能生成有效的分析結果，可能原因：模型能力不足、提示詞過長或內容不清晰。請嘗試更具體的提示或檢查模型配置。"
-    
-    return content
+      self.log(
+          f"Ollama parameters:\n"
+          f"model={self.model},\n"
+          f"options={self.ollama_options},\n"
+          f"keep_alive={self.keep_alive},\n"
+          f"stream={stream}")
+      
+      # Ensure all message content fields are strings
+      if isinstance(prompt, list):
+          for i, message in enumerate(prompt):
+              if isinstance(message, dict) and 'content' in message:
+                  if not isinstance(message['content'], str):
+                      prompt[i]['content'] = str(message['content'])
+      
+      self.log(f"Prompt Content:\n{json.dumps(prompt, ensure_ascii=False, indent=2)}")
+
+      if stream:
+          # Handle streaming response
+          response_stream = self.ollama_client.chat(
+              model=self.model,
+              messages=prompt,
+              stream=True,
+              options=self.ollama_options,
+              keep_alive=self.keep_alive
+          )
+          
+          def stream_generator():
+              for chunk in response_stream:
+                  if 'content' in chunk['message']:
+                      yield chunk['message']['content']
+          
+          return stream_generator()
+
+      else:
+          # Handle non-streaming response
+          response_dict = self.ollama_client.chat(
+              model=self.model,
+              messages=prompt,
+              stream=False,
+              options=self.ollama_options,
+              keep_alive=self.keep_alive
+          )
+
+          self.log(f"Ollama Response:\n{str(response_dict)}")
+          
+          content = response_dict['message']['content']
+          if not isinstance(content, str):
+              content = str(content)
+          
+          if isinstance(prompt, list) and len(prompt) > 0 and prompt[0].get('content') == content:
+              self.log(f"Ollama Response is identical to the prompt. Returning a default message.", title="Warning")
+              return "Ollama 模型未能生成有效的分析結果，可能原因：模型能力不足、提示詞過長或內容不清晰。請嘗試更具體的提示或檢查模型配置。"
+          
+          return content

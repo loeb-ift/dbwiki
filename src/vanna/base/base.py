@@ -57,6 +57,7 @@ from abc import ABC, abstractmethod
 from typing import List, Tuple, Union
 from urllib.parse import urlparse
 
+from app.blueprints.prompts import get_prompt
 import pandas as pd
 import plotly
 import plotly.express as px
@@ -80,6 +81,7 @@ class VannaBase(ABC):
         self.dialect = self.config.get("dialect", "SQL")
         self.language = self.config.get("language", None)
         self.max_tokens = self.config.get("max_tokens", 14000)
+        self.user_id = self.config.get("user_id", None)
 
     def log(self, message: str, title: str = "Info"):
         print(f"{title}: {message}")
@@ -293,8 +295,9 @@ class VannaBase(ABC):
         if last_question is None:
             return new_question
 
+        system_prompt = get_prompt('question_rewriting', user_id=self.user_id)
         prompt = [
-            self.system_message("Your goal is to combine a sequence of questions into a singular question if they are related. If the second question does not relate to the first question and is fully self-contained, return the second question. Return just the new combined question with no additional explanations. The question should theoretically be answerable with a single SQL statement."),
+            self.system_message(system_prompt),
             self.user_message("First question: " + last_question + "\nSecond question: " + new_question),
         ]
 
@@ -321,13 +324,16 @@ class VannaBase(ABC):
             list: A list of followup questions that you can ask Vanna.AI.
         """
 
+        prompt = get_prompt('followup_question_generation', user_id=self.user_id).format(
+            question=question,
+            sql=sql,
+            df_head=df.head(25).to_markdown(),
+            n_questions=n_questions,
+        )
+
         message_log = [
-            self.system_message(
-                f"You are a helpful data assistant. The user asked the question: '{question}'\n\nThe SQL query for this question was: {sql}\n\nThe following is a pandas DataFrame with the results of the query: \n{df.head(25).to_markdown()}\n\n"
-            ),
             self.user_message(
-                f"Generate a list of {n_questions} followup questions that the user might ask about this data. Respond with a list of questions, one per line. Do not answer with any explanations -- just the questions. Remember that there should be an unambiguous SQL query that can be generated from the question. Prefer questions that are answerable outside of the context of this conversation. Prefer questions that are slight modifications of the SQL query that was generated that allow digging deeper into the data. Each question will be turned into a button that the user can click to generate a new SQL query so don't use 'example' type questions. Each question must have a one-to-one correspondence with an instantiated SQL query." +
-                self._response_language()
+                prompt + self._response_language()
             ),
         ]
 
@@ -366,13 +372,14 @@ class VannaBase(ABC):
             str: The summary of the results of the SQL query.
         """
 
+        prompt = get_prompt('summary_generation', user_id=self.user_id).format(
+            question=question,
+            df_markdown=df.to_markdown(),
+        )
+
         message_log = [
-            self.system_message(
-                f"You are a helpful data assistant. The user asked the question: '{question}'\n\nThe following is a pandas DataFrame with the results of the query: \n{df.to_markdown()}\n\n"
-            ),
             self.user_message(
-                "Briefly summarize the data based on the question that was asked. Do not respond with any additional explanation beyond the summary." +
-                self._response_language()
+                prompt + self._response_language()
             ),
         ]
 
@@ -600,8 +607,7 @@ class VannaBase(ABC):
         """
 
         if initial_prompt is None:
-            initial_prompt = f"You are a {self.dialect} expert. " + \
-            "Please help to generate a SQL query to answer the question. Your response should ONLY be based on the given context and follow the response guidelines and format instructions. "
+            initial_prompt = get_prompt('sql_generation', user_id=self.user_id).format(dialect=self.dialect)
 
         initial_prompt = self.add_ddl_to_prompt(
             initial_prompt, ddl_list, max_tokens=self.max_tokens
@@ -612,16 +618,6 @@ class VannaBase(ABC):
 
         initial_prompt = self.add_documentation_to_prompt(
             initial_prompt, doc_list, max_tokens=self.max_tokens
-        )
-
-        initial_prompt += (
-            "===Response Guidelines \n"
-            "1. If the provided context is sufficient, please generate a valid SQL query without any explanations for the question. \n"
-            "2. If the provided context is almost sufficient but requires knowledge of a specific string in a particular column, please generate an intermediate SQL query to find the distinct strings in that column. Prepend the query with a comment saying intermediate_sql \n"
-            "3. If the provided context is insufficient, please explain why it can't be generated. \n"
-            "4. Please use the most relevant table(s). \n"
-            "5. If the question has been asked and answered before, please repeat the answer exactly as it was given before. \n"
-            f"6. Ensure that the output SQL is {self.dialect}-compliant and executable, and free of syntax errors. \n"
         )
 
         message_log = [self.system_message(initial_prompt)]
@@ -696,7 +692,7 @@ class VannaBase(ABC):
         response = self.submit_prompt(
             [
                 self.system_message(
-                    "The user will give you SQL and you will try to guess what the business question this query is answering. Return just the question without any additional explanation. Do not reference the table name in the question. Please respond in Traditional Chinese."
+                    get_prompt('question_generation_from_sql', user_id=self.user_id)
                 ),
                 self.user_message(sql),
             ],
@@ -745,11 +741,12 @@ class VannaBase(ABC):
 
         system_msg += f"The following is information about the resulting pandas DataFrame 'df': \n{df_metadata}"
 
+        # Get the plotly generation prompt from the prompt management system
+        user_prompt = get_prompt('plotly_generation', user_id=self.user_id)
+
         message_log = [
             self.system_message(system_msg),
-            self.user_message(
-                "Can you generate the Python plotly code to chart the results of the dataframe? Assume the data is in a pandas dataframe called 'df'. If there is only one value in the dataframe, use an Indicator. Respond with only Python code. Do not answer with any explanations -- just the code."
-            ),
+            self.user_message(user_prompt),
         ]
 
         plotly_code = self.submit_prompt(message_log, kwargs=kwargs)

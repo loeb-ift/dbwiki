@@ -1,0 +1,126 @@
+2025-10-12 21:03:25,513 - __main__ - INFO - === 开始API上传功能测试 ===
+2025-10-12 21:03:25,513 - __main__ - INFO - 尝试登录用户: user1
+2025-10-12 21:03:25,526 - __main__ - ERROR - 登录失败: 状态码 403
+2025-10-12 21:03:25,526 - __main__ - ERROR - 响应内容: 
+2025-10-12 21:03:25,526 - __main__ - ERROR - 登录失败，无法继续测试
+2025-10-12 21:05:09,935 - __main__ - INFO - === 开始API上传功能测试 ===
+2025-10-12 21:05:09,936 - __main__ - INFO - 尝试登录用户: user1
+2025-10-12 21:05:09,943 - __main__ - ERROR - 登录失败: 状态码 403
+2025-10-12 21:05:09,943 - __main__ - ERROR - 响应内容: 
+2025-10-12 21:05:09,943 - __main__ - ERROR - 登录失败，无法继续测试
+2025-10-12 21:08:28,330 - __main__ - INFO - === 开始API上传功能测试 ===
+2025-10-12 21:08:28,330 - __main__ - INFO - 尝试登录用户: user1
+2025-10-12 21:08:28,341 - __main__ - INFO - 登录成功
+2025-10-12 21:08:28,341 - __main__ - INFO - 尝试创建数据集: api_test_dataset_88fd7833
+2025-10-12 21:08:28,359 - __main__ - INFO - 创建数据集响应状态码: 500
+2025-10-12 21:08:28,359 - __main__ - INFO - 创建数据集响应内容: {
+  "message": "cannot convert dictionary update sequence element #0 to a sequence",
+  "status": "error"
+}
+
+2025-10-12 21:08:28,359 - __main__ - ERROR - 创建数据集失败: 状态码 500
+2025-10-12 21:08:28,359 - __main__ - ERROR - 创建数据集失败，无法继续测试
+2025-10-12 21:09:24,647 - __main__ - INFO - === 开始API上传功能测试 ===
+2025-10-12 21:09:24,647 - __main__ - INFO - 尝试登录用户: user1
+2025-10-12 21:09:24,661 - __main__ - INFO - 登录成功
+2025-10-12 21:09:24,661 - __main__ - INFO - 尝试创建数据集: api_test_dataset_07ead0db
+2025-10-12 21:09:24,678 - __main__ - INFO - 创建数据集响应状态码: 500
+2025-10-12 21:09:24,678 - __main__ - INFO - 创建数据集响应内容: {
+  "message": "cannot convert dictionary update sequence element #0 to a sequence",
+  "status": "error"
+}
+
+2025-10-12 21:09:24,678 - __main__ - ERROR - 创建数据集失败: 状态码 500
+2025-10-12 21:09:24,678 - __main__ - ERROR - 创建数据集失败，无法继续测试
+2025-10-12 21:12:19,791 - __main__ - INFO - === 开始API上传功能测试 ===
+2025-10-12 21:12:19,791 - __main__ - INFO - 尝试登录用户: user1
+2025-10-12 21:12:19,804 - __main__ - INFO - 登录成功
+2025-10-12 21:12:19,804 - __main__ - INFO - 尝试创建数据集: api_test_dataset_61d185e8
+2025-10-12 21:12:19,821 - __main__ - INFO - 创建数据集响应状态码: 500
+2025-10-12 21:12:19,822 - __main__ - INFO - 创建数据集响应内容: {
+  "message": "cannot convert dictionary update sequence element #0 to a sequence",
+  "status": "error"
+}
+
+2025-10-12 21:12:19,822 - __main__ - ERROR - 创建数据集失败: 状态码 500
+2025-10-12 21:12:19,822 - __main__ - ERROR - 创建数据集失败，无法继续测试
+2025-10-12 21:15:16,841 - __main__ - INFO - === 开始API上传功能测试 ===
+2025-10-12 21:15:16,841 - __main__ - INFO - 尝试登录用户: user1
+2025-10-12 21:15:16,857 - __main__ - INFO - 登录成功
+2025-10-12 21:15:16,857 - __main__ - INFO - 尝试创建数据集: api_test_dataset_417f5604
+2025-10-12 21:15:16,885 - __main__ - INFO - 创建数据集响应状态码: 201
+2025-10-12 21:15:16,885 - __main__ - INFO - 创建数据集响应内容: {
+  "datasets": [
+    {
+      "created_at": "2025-10-12 13:15:16",
+      "id": 16,
+      "name": "api_test_dataset_417f5604"
+    },
+    {
+      "created_at": "2025-10-12 13:12:19",
+      "id": 15,
+      "name": "api_test_dataset_61d185e8"
+    },
+    {
+      "created_at": "2025-10-12 13:09:24",
+      "id": 14,
+      "name": "api_test_dataset_07ead0db"
+    },
+    {
+      "created_at": "2025-10-12 13:08:28",
+      "id": 13,
+      "name": "api_test_dataset_88fd7833"
+    },
+    {
+      "created_at": "2025-10-12 12:50:40",
+      "id": 11,
+      "name": "test_diagnostic_dataset"
+    },
+    {
+      "created_at": "2025-10-12 12:41:56",
+      "id": 10,
+      "name": "Test Dataset"
+    },
+    {
+      "created_at": "2025-10-12 12:38:54",
+      "id": 9,
+      "name": "test_1012_2038"
+    }
+  ],
+  "message": "Dataset created successfully.",
+  "new_dataset": {
+    "id": 16,
+    "name": "api_test_dataset_417f5604"
+  },
+  "status": "success"
+}
+
+2025-10-12 21:15:16,886 - __main__ - INFO - 数据集 'api_test_dataset_417f5604' 创建成功
+2025-10-12 21:15:16,886 - __main__ - INFO - 新创建的数据集ID: 16
+2025-10-12 21:15:16,886 - __main__ - INFO - 尝试列出所有数据集
+2025-10-12 21:15:16,893 - __main__ - INFO - 成功获取 7 个数据集
+2025-10-12 21:15:16,893 - __main__ - INFO - - 数据集: api_test_dataset_417f5604 (ID: 16)
+2025-10-12 21:15:16,893 - __main__ - INFO - - 数据集: api_test_dataset_61d185e8 (ID: 15)
+2025-10-12 21:15:16,893 - __main__ - INFO - - 数据集: api_test_dataset_07ead0db (ID: 14)
+2025-10-12 21:15:16,893 - __main__ - INFO - - 数据集: api_test_dataset_88fd7833 (ID: 13)
+2025-10-12 21:15:16,893 - __main__ - INFO - - 数据集: test_diagnostic_dataset (ID: 11)
+2025-10-12 21:15:16,893 - __main__ - INFO - - 数据集: Test Dataset (ID: 10)
+2025-10-12 21:15:16,893 - __main__ - INFO - - 数据集: test_1012_2038 (ID: 9)
+2025-10-12 21:15:16,893 - __main__ - INFO - 确认数据集已创建: api_test_dataset_417f5604
+2025-10-12 21:15:16,893 - __main__ - INFO - 尝试向数据集 ID 16 添加文件
+2025-10-12 21:15:16,901 - __main__ - INFO - 添加文件响应状态码: 200
+2025-10-12 21:15:16,901 - __main__ - INFO - 添加文件响应内容: {
+  "added_tables": [],
+  "all_tables": [
+    "test_data"
+  ],
+  "message": "Added 0 table(s) to dataset.",
+  "status": "success"
+}
+
+2025-10-12 21:15:16,901 - __main__ - INFO - 成功向数据集 ID 16 添加文件
+2025-10-12 21:15:16,901 - __main__ - INFO - 文件添加功能测试成功
+2025-10-12 21:15:16,901 - __main__ - INFO - 尝试删除数据集 ID: 16
+2025-10-12 21:15:16,906 - __main__ - INFO - 数据集 ID 16 删除成功
+2025-10-12 21:15:16,907 - __main__ - INFO - 
+=== API上传功能测试完成 ===

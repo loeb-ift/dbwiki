@@ -1,0 +1,50 @@
+2025-10-12 20:52:52,413 - __main__ - INFO - Successfully imported application modules
+2025-10-12 20:52:52,414 - __main__ - INFO - Starting detailed API diagnostic test
+2025-10-12 20:52:52,414 - __main__ - INFO - Starting dataset upload test...
+2025-10-12 20:52:52,415 - __main__ - INFO - Simulated login for user 'user1'
+2025-10-12 20:52:52,416 - __main__ - INFO - Attempting to upload dataset 'api_test_dataset' with file 'test_data.csv'
+2025-10-12 20:52:52,416 - __main__ - ERROR - API call failed with exception: EnvironBuilder.__init__() got an unexpected keyword argument 'files'
+2025-10-12 20:52:52,418 - __main__ - ERROR - Traceback (most recent call last):
+  File "/Users/loeb/LAB/dbwiki/detailed_api_diagnostic.py", line 116, in test_dataset_upload
+    response = client.post(
+               ^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/werkzeug/test.py", line 1167, in post
+    return self.open(*args, **kw)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/flask/testing.py", line 228, in open
+    request = self._request_from_builder_args(args, kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/flask/testing.py", line 197, in _request_from_builder_args
+    builder = EnvironBuilder(self.application, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/flask/testing.py", line 86, in __init__
+    super().__init__(path, base_url, *args, **kwargs)
+TypeError: EnvironBuilder.__init__() got an unexpected keyword argument 'files'
+
+2025-10-12 20:52:52,418 - __main__ - INFO - Dataset upload test completed
+2025-10-12 20:52:52,418 - __main__ - INFO - Diagnostic test completed. Check detailed_api_diagnostic.log for details.
+2025-10-12 20:54:40,289 - __main__ - INFO - Successfully imported application modules
+2025-10-12 20:54:40,291 - __main__ - INFO - Starting detailed API diagnostic test
+2025-10-12 20:54:40,291 - __main__ - INFO - Starting dataset upload test...
+2025-10-12 20:54:40,292 - __main__ - INFO - Simulated login for user 'user1'
+2025-10-12 20:54:40,293 - __main__ - INFO - Attempting to upload dataset 'api_test_dataset' with file 'test_data.csv'
+2025-10-12 20:54:40,293 - __main__ - ERROR - API call failed with exception: EnvironBuilder.__init__() got an unexpected keyword argument 'files'
+2025-10-12 20:54:40,295 - __main__ - ERROR - Traceback (most recent call last):
+  File "/Users/loeb/LAB/dbwiki/detailed_api_diagnostic.py", line 110, in test_dataset_upload
+    response = client.post(
+               ^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/werkzeug/test.py", line 1167, in post
+    return self.open(*args, **kw)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/flask/testing.py", line 228, in open
+    request = self._request_from_builder_args(args, kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/flask/testing.py", line 197, in _request_from_builder_args
+    builder = EnvironBuilder(self.application, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/flask/testing.py", line 86, in __init__
+    super().__init__(path, base_url, *args, **kwargs)
+TypeError: EnvironBuilder.__init__() got an unexpected keyword argument 'files'
+
+2025-10-12 20:54:40,295 - __main__ - INFO - Dataset upload test completed
+2025-10-12 20:54:40,295 - __main__ - INFO - Diagnostic test completed. Check detailed_api_diagnostic.log for details.

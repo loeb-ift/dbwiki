@@ -14,7 +14,7 @@ default_ef = embedding_functions.DefaultEmbeddingFunction()
 
 class ChromaDB_VectorStore(VannaBase):
     def __init__(self, config=None):
-        VannaBase.__init__(self, config=config)
+        # VannaBase.__init__(self, config=config)
         if config is None:
             config = {}
 

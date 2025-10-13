@@ -19,10 +19,10 @@ def handle_datasets():
     user_id = session['username']
     if request.method == 'GET':
         with get_user_db_connection(user_id) as conn:
-            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT id, dataset_name AS name, created_at FROM datasets ORDER BY created_at DESC")
-            return jsonify({'status': 'success', 'datasets': [dict(row) for row in cursor.fetchall()]})
+            columns = [desc[0] for desc in cursor.description]
+            return jsonify({'status': 'success', 'datasets': [dict(zip(columns, row)) for row in cursor.fetchall()]})
     
     elif request.method == 'POST':
         dataset_name = request.form.get('dataset_name')
@@ -32,6 +32,8 @@ def handle_datasets():
         
         db_path = os.path.join('user_data', 'datasets', f'{uuid.uuid4().hex}.sqlite')
         try:
+            # Ensure the directory for the new database exists
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
             engine = create_engine(f'sqlite:///{db_path}')
             for file in files:
                 df = pd.read_csv(file.stream)
@@ -43,7 +45,18 @@ def handle_datasets():
                 cursor.execute("INSERT INTO datasets (dataset_name, db_path) VALUES (?, ?)", (dataset_name, db_path))
                 new_id = cursor.lastrowid
                 conn.commit()
-            return jsonify({'status': 'success', 'dataset': {'id': new_id, 'dataset_name': dataset_name}}), 201
+                
+                # After adding, refetch all datasets to return the updated list
+                cursor.execute("SELECT id, dataset_name AS name, created_at FROM datasets ORDER BY created_at DESC")
+                columns = [desc[0] for desc in cursor.description]
+                all_datasets = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                
+            return jsonify({
+                'status': 'success',
+                'message': 'Dataset created successfully.',
+                'new_dataset': {'id': new_id, 'name': dataset_name},
+                'datasets': all_datasets
+            }), 201
         except Exception as e:
             if os.path.exists(db_path): os.remove(db_path)
             return jsonify({'status': 'error', 'message': str(e)}), 500
