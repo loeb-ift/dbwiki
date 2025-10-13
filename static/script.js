@@ -735,22 +735,29 @@ async function ask() {
     const chartContainer = document.getElementById('chart-container');
     const analysisContainer = document.getElementById('analysis-container');
     const followupContainer = document.getElementById('followup-container');
-
-    // Reset UI
-    if (askBtn) {
-        askBtn.disabled = true;
-        askBtn.textContent = '思考中...';
+    const statusContainer = document.getElementById('ask-status-container');
+    const sqlErrorContainer = document.getElementById('sql-error-container');
+ 
+     // Reset UI
+     if (askBtn) {
+         askBtn.disabled = true;
+         askBtn.textContent = '思考中...';
+     }
+    if (statusContainer) statusContainer.textContent = '正在初始化請求...';
+     if (thinkingContainer) thinkingContainer.style.display = 'block';
+     if (thinkingOutput) thinkingOutput.innerHTML = '';
+ 
+     // Hide all result containers initially
+     [resultContainer, chartContainer, analysisContainer, followupContainer, sqlErrorContainer].forEach(el => {
+         if (el) {
+             el.innerHTML = '';
+             el.style.display = 'none';
+         }
+     });
+    if(sqlContainer) {
+        sqlContainer.style.display = 'none';
+        sqlContainer.innerHTML = '<pre id="sql-output"></pre>';
     }
-    if (thinkingContainer) thinkingContainer.style.display = 'block';
-    if (thinkingOutput) thinkingOutput.innerHTML = '';
-
-    // Hide all result containers initially
-    [sqlContainer, resultContainer, chartContainer, analysisContainer, followupContainer].forEach(el => {
-        if (el) {
-            el.innerHTML = '';
-            el.style.display = 'none';
-        }
-    });
     lastGeneratedSql = '';
 
     try {
@@ -792,7 +799,17 @@ async function ask() {
             askBtn.disabled = false;
             askBtn.textContent = '提出問題';
         }
-    }
+       if (statusContainer) statusContainer.textContent = '流程處理完成。';
+       
+       const chartContainer = document.getElementById('chart-container');
+       if (chartContainer && chartContainer.style.display === 'none') {
+           const chartOutput = document.getElementById('chart-output');
+           if(chartOutput) {
+               chartOutput.innerHTML = '<p><i>沒有可用的圖表數據。</i></p>';
+           }
+           chartContainer.style.display = 'block';
+       }
+   }
 }
 
 function handleStreamedData(data) {
@@ -816,11 +833,18 @@ function handleStreamedData(data) {
         }
         thinkingOutput.innerHTML += html;
     } else if (type === 'info') {
+        const statusContainer = document.getElementById('ask-status-container');
+        if (statusContainer) statusContainer.textContent = content;
         if (thinkingOutput) thinkingOutput.innerHTML += `<p><i>${content}</i></p>`;
     } else if (type === 'sql_chunk') {
         const sqlContainer = document.getElementById('sql-container');
         const sqlOutput = document.getElementById('sql-output');
         if (sqlContainer && sqlOutput) {
+            if (!sqlContainer.querySelector('h3')) {
+                const title = document.createElement('h3');
+                title.textContent = '思考可能的SQL語法';
+                sqlContainer.prepend(title);
+            }
             sqlContainer.style.display = 'block';
             sqlOutput.textContent += content;
         }
@@ -828,6 +852,11 @@ function handleStreamedData(data) {
         const sqlContainer = document.getElementById('sql-container');
         const sqlOutput = document.getElementById('sql-output');
         if (sqlContainer && sqlOutput) {
+            if (!sqlContainer.querySelector('h3')) {
+                const title = document.createElement('h3');
+                title.textContent = '思考可能的SQL語法';
+                sqlContainer.prepend(title);
+            }
             lastGeneratedSql = content;
             sqlOutput.textContent = content; // Set the final SQL
             sqlContainer.style.display = 'block';
@@ -848,20 +877,24 @@ function handleStreamedData(data) {
         const chartContainer = document.getElementById('chart-container');
         const chartOutput = document.getElementById('chart-output');
         if (chartContainer && chartOutput) {
-            try {
-                const plotly_json = (new Function(`return ${content}`))();
-                Plotly.newPlot(chartOutput, plotly_json.data, plotly_json.layout);
-                chartContainer.style.display = 'block';
-            } catch (e) {
-                console.error("無法渲染 Plotly 圖表:", e);
+            if (content) {
+                try {
+                    const plotly_json = (new Function(`return ${content}`))();
+                    Plotly.newPlot(chartOutput, plotly_json.data, plotly_json.layout);
+                } catch (e) {
+                    console.error("無法渲染 Plotly 圖表:", e);
+                    chartOutput.innerHTML = '<p><i>渲染圖表時發生錯誤。</i></p>';
+                }
+            } else {
+                chartOutput.innerHTML = '<p><i>沒有可用的圖表數據。</i></p>';
             }
+            chartContainer.style.display = 'block';
         }
     } else if (type === 'explanation') {
         const analysisContainer = document.getElementById('analysis-container');
-        if (analysisContainer && window.marked) {
-            // The 'explanation' is the "Thinking Result" and should be displayed in its own container.
-            // We replace the container's content entirely to ensure it's a distinct block.
-            analysisContainer.innerHTML = `<h3>思考結果：</h3>${marked.parse(content)}`;
+        const analysisOutput = document.getElementById('analysis-output');
+        if (analysisContainer && analysisOutput && window.marked) {
+            analysisOutput.innerHTML = marked.parse(content);
             analysisContainer.style.display = 'block';
         }
     } else if (type === 'followup_questions' && content && content.length > 0) {
@@ -880,6 +913,22 @@ function handleStreamedData(data) {
                 followupOutput.appendChild(btn);
             });
             followupContainer.style.display = 'block';
+        }
+    } else if (type === 'sql_error') {
+        const sqlContainer = document.getElementById('sql-container');
+        const sqlOutput = document.getElementById('sql-output');
+        if (sqlContainer && sqlOutput && data.sql) {
+            sqlOutput.textContent = data.sql;
+            sqlContainer.style.display = 'block';
+        }
+
+        const errorContainer = document.getElementById('sql-error-container');
+        const errorSqlOutput = document.getElementById('sql-error-output');
+        const errorDetailsOutput = document.getElementById('sql-error-details');
+        if (errorContainer && errorSqlOutput && errorDetailsOutput) {
+            errorSqlOutput.textContent = data.sql;
+            errorDetailsOutput.textContent = data.error;
+            errorContainer.style.display = 'block';
         }
     } else if (type === 'error') {
         throw new Error(data.message);

@@ -147,40 +147,66 @@ def train_model():
 
     def generate_progress():
         try:
-            ddl = request.form.get('ddl')
-            documentation = request.form.get('doc', '')
-            qa_pairs_json = request.form.get('qa_pairs')
-            qa_pairs = json.loads(qa_pairs_json) if qa_pairs_json else []
-
             yield f"data: {json.dumps({'percentage': 0, 'message': '開始訓練...', 'log': 'Training process initiated.'})}\n\n"
+
+            # 1. 从数据库加载所有训练数据
+            ddl_list, doc_list, qa_list = [], [], []
+            with get_user_db_connection(user_id) as conn:
+                cursor = conn.cursor()
+                # 获取 DDL
+                cursor.execute("SELECT ddl FROM ddl_statements WHERE dataset_id = ?", (dataset_id,))
+                ddl_list = [row[0] for row in cursor.fetchall()]
+                # 获取文档
+                cursor.execute("SELECT documentation_text FROM training_documentation WHERE dataset_id = ?", (dataset_id,))
+                doc_list = [row[0] for row in cursor.fetchall() if row[0]]
+                # 获取 QA 对
+                cursor.execute("SELECT question, sql_query FROM training_qa WHERE dataset_id = ?", (dataset_id,))
+                qa_list = [{'question': row[0], 'sql': row[1]} for row in cursor.fetchall()]
             
-            total_steps = (1 if ddl else 0) + (1 if documentation else 0) + (1 if qa_pairs else 0)
+            yield f"data: {json.dumps({'percentage': 5, 'message': f'已加載 {len(ddl_list)} 條DDL, {len(doc_list)} 份文件, {len(qa_list)} 組問答。', 'log': 'Loaded training data from DB.'})}\n\n"
+
+            total_steps = (1 if ddl_list else 0) + (1 if doc_list else 0) + (1 if qa_list else 0)
+            if total_steps == 0:
+                yield f"data: {json.dumps({'percentage': 100, 'message': '沒有找到可訓練的資料。', 'log': 'No training data found.'})}\n\n"
+                return
+
             completed_steps = 0
-
-            if ddl:
-                vn.train(ddl=ddl)
-                completed_steps += 1
-                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': 'DDL 訓練完成。', 'log': 'DDL training completed.'})}\n\n"
             
-            if documentation:
-                vn.train(documentation=documentation)
+            # 2. 训练DDL
+            if ddl_list:
+                full_ddl = "\n\n".join(ddl_list)
+                vn.train(ddl=full_ddl)
                 completed_steps += 1
-                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': '文件訓練完成。', 'log': 'Documentation training completed.'})}\n\n"
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*90 + 5, 'message': 'DDL 訓練完成。', 'log': 'DDL training completed.'})}\n\n"
+            
+            # 3. 训练文档
+            if doc_list:
+                full_doc = "\n\n".join(doc_list)
+                vn.train(documentation=full_doc)
+                completed_steps += 1
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*90 + 5, 'message': '文件訓練完成。', 'log': 'Documentation training completed.'})}\n\n"
 
-            if qa_pairs:
-                total_pairs = len(qa_pairs)
-                for i, pair in enumerate(qa_pairs):
+            # 4. 训练QA对
+            if qa_list:
+                total_pairs = len(qa_list)
+                for i, pair in enumerate(qa_list):
                     if pair.get('question') and pair.get('sql'):
                         vn.train(question=pair['question'], sql=pair['sql'])
-                    if i % 5 == 0 or i == total_pairs - 1:
-                        current_step = (completed_steps + (i + 1)/total_pairs) / total_steps
-                        yield f"data: {json.dumps({'percentage': current_step*100, 'message': f'正在訓練問答配對... ({i+1}/{total_pairs})', 'log': f'Training QA pair {i+1}/{total_pairs}'})}\n\n"
+                    
+                    # 仅在特定点更新进度，避免过于频繁
+                    if i % 10 == 0 or i == total_pairs - 1:
+                        base_progress = (completed_steps / total_steps) * 90 + 5
+                        qa_progress = ((i + 1) / total_pairs) * (90 / total_steps)
+                        current_percentage = base_progress + qa_progress
+                        yield f"data: {json.dumps({'percentage': current_percentage, 'message': f'正在訓練問答配對... ({i+1}/{total_pairs})', 'log': f'Training QA pair {i+1}/{total_pairs}'})}\n\n"
+                
                 completed_steps += 1
-                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*100, 'message': f'問答配對 ({len(qa_pairs)} 組) 訓練完成。', 'log': f'QA pair training for {len(qa_pairs)} pairs completed.'})}\n\n"
+                yield f"data: {json.dumps({'percentage': (completed_steps/total_steps)*90 + 5, 'message': f'問答配對 ({len(qa_list)} 組) 訓練完成。', 'log': f'QA pair training for {len(qa_list)} pairs completed.'})}\n\n"
 
             yield f"data: {json.dumps({'percentage': 100, 'message': '所有訓練步驟已完成。', 'log': 'All training steps completed.'})}\n\n"
 
         except Exception as e:
+            logger.error(f"訓練過程中發生錯誤: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return Response(stream_with_context(generate_progress()), mimetype='text/event-stream')

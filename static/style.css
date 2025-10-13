@@ -236,3 +236,13 @@ td pre {
     font-size: 0.9em;
     color: #333;
 }
+
+#analysis-container pre {
+    white-space: pre-wrap;
+    word-break: break-all;
+    background-color: #f8f8f8;
+    padding: 1em;
+    border-radius: 4px;
+    max-width: 100%;
+    overflow-x: auto;
+}

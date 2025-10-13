@@ -180,6 +180,7 @@
                 <textarea id="question-input" placeholder="在這裡輸入您的問題..."></textarea>
             </div>
             <button id="ask-button" onclick="ask()">提出問題</button>
+            <div id="ask-status-container" style="margin-top: 1em; font-style: italic; color: #555;"></div>
             <div id="results-container" style="margin-top: 1.5em;">
                 <div id="thinking-container" style="display: none;">
                     <h3>思考過程：</h3>
@@ -200,12 +201,20 @@
                 </div>
                 <div id="analysis-container" style="margin-top: 1.5em; display: none;">
                     <div class="scrollable-table-container">
+                        <h3>思考結果：</h3>
                         <div id="analysis-output"></div>
                     </div>
                 </div>
                 <div id="sql-container" style="display: none;">
-                    <h3>生成的 SQL：</h3>
+                    <h3>思考可能的SQL語法</h3>
                     <pre id="sql-output"></pre>
+                    <div id="sql-error-container" style="display: none; margin-top: 1em; border: 1px solid #d9534f; border-radius: 4px; padding: 1em; background-color: #f2dede;">
+                        <h4 style="color: #a94442; margin-top: 0;">SQL 執行失敗</h4>
+                        <p style="color: #a94442;">系統生成的以下 SQL 語法在執行時發生錯誤：</p>
+                        <pre id="sql-error-output" style="background-color: #ebcccc; color: #a94442;"></pre>
+                        <p style="color: #a94442; margin-top: 1em;">錯誤詳情：</p>
+                        <pre id="sql-error-details" style="background-color: #ebcccc; color: #a94442;"></pre>
+                    </div>
                 </div>
                 <div id="chart-container" style="display: none; margin-top: 1.5em;">
                     <h3>視覺化圖表：</h3>

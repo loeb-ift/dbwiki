@@ -89,8 +89,12 @@ def ask_question():
                     vn_instance.log_queue.put({'type': 'info', 'content': f"找到高度相似的已存問題，直接使用其 SQL。"})
                 else:
                     vn_instance.log_queue.put({'type': 'info', 'content': "正在請求 LLM 生成新的 SQL..."})
-                    sql_generator = vn.generate_sql(question=question, allow_gpt_oss_to_see_logs=True)
-                    sql = "".join(sql_generator)
+                    sql = vn.generate_sql(
+                        question=question,
+                        ddl_list=related_ddl,
+                        doc_list=related_docs,
+                        question_sql_list=similar_qa
+                    )
                 
                 vn_instance.log_queue.put({'type': 'sql', 'content': sql})
                 write_ask_log(user_id, "generated_sql", sql)
@@ -104,22 +108,30 @@ def ask_question():
 
                 try:
                     df = vn.run_sql(sql=sql)
-                except OperationalError as e:
-                    if "no such table" in str(e):
-                        vn.log(f"SQL 執行被跳過，因為找不到資料表。", "警告")
+                    if not df.empty:
+                        vn_instance.log_queue.put({'type': 'df', 'content': df.to_json(orient='split', date_format='iso')})
                     else:
-                        vn.log(f"SQL 執行失敗: {e}", "錯誤")
-                    df = pd.DataFrame()
-                    write_ask_log(user_id, "sql_execution_error", str(e))
+                        vn_instance.log_queue.put({'type': 'message', 'content': 'SQL查詢返回空結果。'})
 
-                if not df.empty:
-                    vn_instance.log_queue.put({'type': 'df', 'content': df.to_json(orient='split', date_format='iso')})
-                else:
-                    vn_instance.log_queue.put({'type': 'message', 'content': 'SQL查詢返回空結果。'})
+                except OperationalError as e:
+                    error_message = f"SQL 執行失敗: {e}"
+                    vn_instance.log_queue.put({
+                        'type': 'sql_error',
+                        'sql': sql,
+                        'error': error_message
+                    })
+                    write_ask_log(user_id, "sql_execution_error", error_message)
+                    df = pd.DataFrame() # 确保df在后续步骤中是空的
+
+                
+                vn_instance.log_queue.put({'type': 'info', 'content': f"SQL 執行完畢，DataFrame 行數: {len(df)}"})
                 
                 chart_code = vn.generate_plotly_code(question=question, sql=sql, df=df)
                 if chart_code:
+                    vn_instance.log_queue.put({'type': 'info', 'content': "Plotly 圖表程式碼已生成。"})
                     vn_instance.log_queue.put({'type': 'chart', 'content': chart_code})
+                else:
+                    vn_instance.log_queue.put({'type': 'info', 'content': "未生成 Plotly 圖表程式碼。"})
                 
                 # The new analysis step already provides an explanation.
                 # The call to generate_explanatory_sql is redundant and has been removed.
