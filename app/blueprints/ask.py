@@ -127,11 +127,7 @@ def ask_question():
                 vn_instance.log_queue.put({'type': 'info', 'content': f"SQL 執行完畢，DataFrame 行數: {len(df)}"})
                 
                 chart_code = vn.generate_plotly_code(question=question, sql=sql, df=df)
-                if chart_code:
-                    vn_instance.log_queue.put({'type': 'info', 'content': "Plotly 圖表程式碼已生成。"})
-                    vn_instance.log_queue.put({'type': 'chart', 'content': chart_code})
-                else:
-                    vn_instance.log_queue.put({'type': 'info', 'content': "未生成 Plotly 圖表程式碼。"})
+                vn_instance.log_queue.put({'type': 'chart', 'content': chart_code})
                 
                 # The new analysis step already provides an explanation.
                 # The call to generate_explanatory_sql is redundant and has been removed.
