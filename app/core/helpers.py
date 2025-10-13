@@ -1,5 +1,6 @@
 import os
 import time
+import re
 from sqlalchemy import create_engine, inspect, text
 
 from .db_utils import get_user_db_connection
@@ -139,3 +140,55 @@ def get_dataset_tables(user_id, dataset_id):
         }, None
     except Exception as e:
         return None, str(e)
+
+def extract_serial_number_candidates(qa_pairs: list) -> dict:
+    """
+    Analyzes a list of QA pairs to find potential serial number columns.
+    It looks for WHERE clauses with string literals that have a mix of letters and numbers.
+    """
+    # Regex to find patterns like: WHERE column_name = 'string' OR WHERE column_name LIKE 'string%'
+    where_clause_pattern = re.compile(r"WHERE\s+`?(\w+)`?\s*(?:=|LIKE)\s*'([^']+)'", re.IGNORECASE)
+    
+    candidates = {}
+    
+    if not qa_pairs:
+        return candidates
+
+    for qa in qa_pairs:
+        # qa_pairs from cursor.fetchall() is a list of tuples, not dicts.
+        # Access by index. Assuming the SQL query is the second element (index 1).
+        if len(qa) < 2:
+            continue
+        sql = qa[1]
+        if not sql:
+            continue
+            
+        matches = where_clause_pattern.findall(sql)
+        for column, value in matches:
+            # Basic heuristic for serial numbers: contains both digits and letters, and is between 4 and 40 chars long.
+            if re.search(r"\d", value) and re.search(r"[a-zA-Z]", value) and 4 < len(value) < 40:
+                if column not in candidates:
+                    candidates[column] = []
+                if value not in candidates[column]:
+                    candidates[column].append(value)
+    
+    # Return only candidates that have at least a few examples
+    return {col: values for col, values in candidates.items() if len(values) >= 3}
+
+def sample_column_data(db_path: str, table_name: str, column_name: str, sample_size: int = 100) -> list:
+    """
+    Connects to a SQLite database and samples data from a specific column.
+    """
+    samples = []
+    try:
+        engine = create_engine(f'sqlite:///{db_path}')
+        with engine.connect() as connection:
+            # Use `"` for table and column names to handle spaces or special characters
+            query = text(f'SELECT DISTINCT "{column_name}" FROM "{table_name}" ORDER BY RANDOM() LIMIT {sample_size}')
+            result = connection.execute(query)
+            samples = [row[0] for row in result if row[0] is not None]
+    except Exception as e:
+        # In a real app, you'd want to log this error
+        print(f"Error sampling column {table_name}.{column_name}: {e}")
+    
+    return samples

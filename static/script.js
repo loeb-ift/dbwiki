@@ -1123,7 +1123,96 @@ function init() {
 }
 
 // --- Global Exports ---
+async function analyzeSchema() {
+    if (!activeDatasetId) {
+        alert('請先選擇一個資料集。');
+        return;
+    }
+
+    const docOutput = document.getElementById('documentation-output');
+    const serialOutput = document.getElementById('serial-number-analysis-output');
+    const analyzeBtn = document.getElementById('analyze-schema-btn');
+    const docSection = document.getElementById('documentation-output-section');
+
+    // Clear previous results and show the section
+    if(docOutput) docOutput.innerHTML = '<p><i>正在初始化分析...</i></p>';
+    if(serialOutput) serialOutput.innerHTML = '';
+    if(docSection) docSection.style.display = 'block';
+    
+    if(analyzeBtn) {
+        analyzeBtn.disabled = true;
+        analyzeBtn.textContent = '分析中...';
+    }
+
+    try {
+        const response = await fetch('/api/analyze_schema', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ streaming: true })
+        });
+
+        if (!response.body) throw new Error('The response from the server is invalid.');
+
+        // Clear the initial message
+        if(docOutput) docOutput.innerHTML = '';
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const events = chunk.split('\n\n');
+
+            for (const event of events) {
+                if (!event.startsWith('data: ')) continue;
+                try {
+                    const data = JSON.parse(event.substring(6));
+                    
+                    if (data.type === 'info') {
+                        const p = document.createElement('p');
+                        p.innerHTML = `<i>${data.message}</i>`;
+                        if(docOutput) docOutput.appendChild(p);
+                    } else if (data.type === 'context') {
+                         if(docOutput) {
+                            const h4 = document.createElement('h4');
+                            h4.textContent = `上下文: ${data.subtype}`;
+                            const pre = document.createElement('pre');
+                            pre.textContent = JSON.stringify(data.content, null, 2);
+                            docOutput.appendChild(h4);
+                            docOutput.appendChild(pre);
+                         }
+                    } else if (data.type === 'analysis_result') {
+                        if(docOutput) docOutput.innerHTML = `<pre>${data.content}</pre>`;
+                    } else if (data.type === 'serial_number_analysis_result') {
+                        if(serialOutput) serialOutput.innerHTML = `<pre>${data.content}</pre>`;
+                    } else if (data.type === 'end_of_stream') {
+                        if(serialOutput && !serialOutput.innerHTML) {
+                            serialOutput.innerHTML = '<p>未找到或無法分析流水號規則。</p>';
+                        }
+                    } else if (data.type === 'error') {
+                        throw new Error(data.message);
+                    }
+                } catch (e) {
+                    console.warn('Failed to parse stream data chunk:', e);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('分析資料庫結構失敗:', error);
+        if(docOutput) docOutput.innerHTML += `<p style="color: red;">分析失敗: ${error.message}</p>`;
+    } finally {
+        if(analyzeBtn) {
+            analyzeBtn.disabled = false;
+            analyzeBtn.textContent = '自動分析資料庫結構';
+        }
+    }
+}
+
 // Export functions that are called from HTML onclick attributes
+window.analyzeSchema = analyzeSchema;
 window.handleNewDatasetSubmit = handleNewDatasetSubmit;
 window.handleEditDatasetSubmit = handleEditDatasetSubmit;
 window.openNewDatasetModal = openNewDatasetModal;

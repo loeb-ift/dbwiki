@@ -22,6 +22,10 @@ def ask_question():
         return jsonify({'status': 'error', 'message': 'User not authenticated. Please login.'}), 401
         
     user_id = session['username']
+    
+    # Clean up previous logs before starting a new request
+    _delete_all_ask_logs(user_id)
+    
     data = request.json
     question = data.get('question')
     if not question:

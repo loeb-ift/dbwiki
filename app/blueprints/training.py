@@ -7,7 +7,7 @@ import re
 
 from app.core.db_utils import get_user_db_connection
 from app.vanna_wrapper import get_vanna_instance, configure_vanna_for_request
-from app.core.helpers import load_prompt_template, get_dataset_tables
+from app.core.helpers import load_prompt_template, get_dataset_tables, extract_serial_number_candidates, sample_column_data
 
 # 配置日志记录器
 logger = logging.getLogger(__name__)
@@ -247,180 +247,119 @@ def generate_qa_from_sql():
 def analyze_schema():
     user_id = session.get('username')
     dataset_id = session.get('active_dataset')
-    logger.debug(f"analyze_schema called with user_id: '{user_id}', dataset_id: '{dataset_id}'")
-
+    
     if not user_id or not dataset_id:
+        # This error won't be nicely formatted for SSE, but it's a safeguard.
         return jsonify({'status': 'error', 'message': 'User not logged in or no active dataset selected.'}), 400
 
-    # If client requests non-streaming JSON response
-    payload = request.get_json(silent=True) or {}
-    if payload.get('streaming') is False:
+    def generate_analysis_stream():
         try:
+            # 0. Clean up previous logs
+            from app.core.helpers import _delete_all_ask_logs
+            _delete_all_ask_logs(user_id)
+            yield f"data: {json.dumps({'type': 'info', 'message': '開始新的分析任務...'})}\n\n"
+
+            # 1. Setup
             vn = get_vanna_instance(user_id)
             vn = configure_vanna_for_request(vn, user_id, dataset_id)
+            yield f"data: {json.dumps({'type': 'info', 'message': '分析環境初始化完成。'})}\n\n"
 
-            # 收集資料集上下文：DDL、文件、QA
+            # 2. Gather Context
             ds_ctx, ds_err = get_dataset_tables(user_id, dataset_id)
             ddl_list = ds_ctx.get('ddl_statements', []) if ds_ctx else []
-            # 收集除 __dataset_analysis__ 的所有 documentation
             docs_list = []
             qa_examples = []
             with get_user_db_connection(user_id) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT documentation_text FROM training_documentation WHERE dataset_id = ? AND table_name != '__dataset_analysis__'", (dataset_id,))
                 docs_list = [row[0] for row in cursor.fetchall() if row and row[0]]
-                cursor.execute("SELECT question, sql_query FROM training_qa WHERE dataset_id = ? ORDER BY created_at DESC LIMIT 50", (dataset_id,))
+                cursor.execute("SELECT question, sql_query, table_name FROM training_qa WHERE dataset_id = ? ORDER BY created_at DESC LIMIT 100", (dataset_id,))
                 qa_examples = cursor.fetchall()
-            # 準備系統提示詞：將 DDL/文件/QA 注入
+            
+            yield f"data: {json.dumps({'type': 'info', 'message': '已收集 DDL、文件和 QA 上下文。'})}\n\n"
+
+            # 3. Main Structure Analysis
             documentation_prompt = load_prompt_template('documentation')
             safe_prompt = (documentation_prompt or "").replace('＠', '@')
-            # 附加 DDL
-            if ddl_list:
-                safe_prompt += "\n\n===Tables (DDL)===\n" + "\n\n".join(ddl_list[:50])
-            # 附加 documentation
-            if docs_list:
-                safe_prompt += "\n\n===Additional Context===\n" + "\n\n".join(docs_list[:20])
-            # 附加 QA 範例（只放部分避免過長）
+            if ddl_list: safe_prompt += "\n\n===Tables (DDL)===\n" + "\n\n".join(ddl_list[:50])
+            if docs_list: safe_prompt += "\n\n===Additional Context===\n" + "\n\n".join(docs_list[:20])
             if qa_examples:
                 safe_prompt += "\n\n===Question-SQL Examples===\n"
-                for q, s in qa_examples[:30]:
-                    safe_prompt += f"\nQ: {q}\nSQL: {s}\n"
+                for q, s, _ in qa_examples[:30]: safe_prompt += f"\nQ: {q}\nSQL: {s}\n"
+            
             question = "請根據上述上下文（DDL、文件、問答範例），生成一份全面的技術文件，詳細描述其架構、業務邏輯與查詢模式。請勿輸出 SQL 程式碼，只要文字分析。"
-            message_log = [
-                vn.system_message(safe_prompt),
-                vn.user_message(question)
-            ]
-            try:
-                response_text = vn.submit_prompt(message_log)
-            except Exception as e:
-                err_msg = str(e)
-                logger.error(f"analyze_schema JSON path submit_prompt failed: {err_msg}")
-                if "The string did not match the expected pattern" in err_msg:
-                    fallback_system = "你是一位資料庫技術文件生成助手。請用繁體中文，依照使用者需求，產出結構化技術文件，包含：架構總覽、主要資料表、關聯關係、業務流程、典型查詢模式、索引與效能建議、安全與權限、維運建議。不要產生SQL，只要文字分析。"
-                    message_log = [
-                        vn.system_message(fallback_system),
-                        vn.user_message(question)
-                    ]
-                    response_text = vn.submit_prompt(message_log)
-                else:
-                    raise
-
+            message_log = [vn.system_message(safe_prompt), vn.user_message(question)]
+            
+            yield f"data: {json.dumps({'type': 'info', 'message': '正在呼叫 LLM 進行主要結構分析...'})}\n\n"
+            response_text = vn.submit_prompt(message_log)
             final_analysis = str(response_text) if response_text is not None else ""
-            if final_analysis.strip():
-                with get_user_db_connection(user_id) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)",
-                        (dataset_id, '__dataset_analysis__', final_analysis)
-                    )
-                    conn.commit()
-                return jsonify({'status': 'success', 'analysis_result': final_analysis})
-            else:
-                return jsonify({'status': 'error', 'message': 'AI 模型未返回有效內容。'}), 500
-        except Exception as e:
-            logger.exception("analyze_schema JSON path failed")
-            return jsonify({'status': 'error', 'message': str(e)}), 500
+            yield f"data: {json.dumps({'type': 'analysis_result', 'content': final_analysis})}\n\n"
 
-    def generate_analysis_stream():
-        try:
-            # 開始進度
-            yield "data: " + json.dumps({'type': 'progress', 'percentage': 5, 'message': '開始資料庫結構分析'}) + "\n\n"
-            yield "data: " + json.dumps({'chunk': '# 正在開始資料庫結構分析...\n\n'}) + "\n\n"
-            
-            vn = get_vanna_instance(user_id)
-            vn = configure_vanna_for_request(vn, user_id, dataset_id)
-            yield "data: " + json.dumps({'type': 'progress', 'percentage': 10, 'message': '初始化分析環境完成'}) + "\n\n"
-            # The question for meta-analysis
-            question = "請根據您所知道的所有關於此資料庫的上下文（DDL, 文件, 問答範例），生成一份全面的技術文件，詳細描述其架構、業務邏輯和查詢模式。"
-            
-            # We use generate_sql because it internally calls get_sql_prompt which handles context stuffing and token limits.
-            # The 'SQL' it generates in this case will actually be our documentation.
-            # We also override the initial prompt to use our 'documentation' template.
-            documentation_prompt = load_prompt_template('documentation')
-            
-            yield "data: " + json.dumps({'type': 'progress', 'percentage': 25, 'message': '正在構建提示（包含 DDL/文件/QA 上下文）'}) + "\n\n"
-            yield "data: " + json.dumps({'chunk': '## 步驟 1/2: 使用 Vanna 安全地建構提示...\n\n'}) + "\n\n"
-            
-            # Use submit_prompt directly with streaming to avoid SQL-specific extraction and regex issues
-            # Sanitize known problematic full-width symbols in the prompt template
-            safe_prompt = (documentation_prompt or "").replace('＠', '@')
-            message_log = [
-                vn.system_message(safe_prompt),
-                vn.user_message(question)
-            ]
-            yield "data: " + json.dumps({'type': 'progress', 'percentage': 40, 'message': '提示構建完成，發送至 LLM 模型'}) + "\n\n"
-            # Non-streaming request to simplify processing with fallback handling
+            # 4. Serial Number Analysis
+            serial_number_analysis_result = ""
+            yield f"data: {json.dumps({'type': 'info', 'message': '開始流水號/料號規則分析...'})}\n\n"
             try:
-                response_text = vn.submit_prompt(message_log)
-            except Exception as e:
-                err_msg = str(e)
-                logger.error(f"analyze_schema submit_prompt failed: {err_msg}")
-                # 特殊處理: 正則匹配錯誤或未知格式問題時，使用簡化版提示詞重試一次
-                if "The string did not match the expected pattern" in err_msg:
-                    yield "data: " + json.dumps({'chunk': '⚠️ 偵測到模型回應格式問題，正在使用簡化提示詞重試...\n\n'}) + "\n\n"
-                    fallback_system = "你是一位資料庫技術文件生成助手。請用繁體中文，依照使用者需求，產出結構化技術文件，包含：架構總覽、主要資料表、關聯關係、業務流程、典型查詢模式、索引與效能建議、安全與權限、維運建議。不要產生SQL，只要文字分析。"
-                    message_log = [
-                        vn.system_message(fallback_system),
-                        vn.user_message(question)
-                    ]
-                    try:
-                        response_text = vn.submit_prompt(message_log)
-                    except Exception as e2:
-                        logger.error(f"analyze_schema fallback submit_prompt failed: {e2}")
-                        raise
-                else:
-                    raise
-            
-            yield "data: " + json.dumps({'chunk': '## 步驟 2/2: 發送給 AI 模型並接收分析結果...\n\n---\n\n'}) + "\n\n"
+                candidate_columns = extract_serial_number_candidates(qa_examples)
+                yield f"data: {json.dumps({'type': 'context', 'subtype': 'candidate_fields', 'content': list(candidate_columns.keys())})}\n\n"
+                
+                if candidate_columns:
+                    db_path_row = None
+                    with get_user_db_connection(user_id) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT db_path FROM datasets WHERE id = ?", (dataset_id,))
+                        db_path_row = cursor.fetchone()
+                    
+                    if db_path_row:
+                        db_path = db_path_row[0]
+                        serial_analysis_prompt_template = load_prompt_template('serial_number_analysis')
+                        
+                        # Analyze first candidate for simplicity
+                        first_candidate_col = list(candidate_columns.keys())[0]
+                        
+                        # Find table name for the candidate column
+                        table_name = 'global'
+                        for q, s, tn in qa_examples:
+                            if first_candidate_col in s:
+                                table_name = tn if tn else 'global'
+                                break
+                        
+                        yield f"data: {json.dumps({'type': 'info', 'message': f'正在為欄位 {first_candidate_col} 從資料表 {table_name} 中取樣...'})}\n\n"
+                        sampled_data = sample_column_data(db_path, table_name, first_candidate_col)
 
-            final_analysis = str(response_text) if response_text is not None else ""
-            if final_analysis:
-                # Stream the single response as multiple SSE chunks for better UI responsiveness
-                def _chunk_text(text, max_len=1500):
-                    paragraphs = re.split(r'\n{2,}', text)
-                    buf = ""
-                    for para in paragraphs:
-                        if not para:
-                            continue
-                        # If adding this paragraph would exceed max_len, yield the buffer first
-                        if buf and len(buf) + len(para) + 2 > max_len:
-                            yield buf
-                            buf = ""
-                        # Append the paragraph with a blank line separator
-                        if buf:
-                            buf += "\n\n" + para
+                        if sampled_data:
+                            yield f"data: {json.dumps({'type': 'context', 'subtype': 'sampled_data', 'content': sampled_data})}\n\n"
+                            full_serial_prompt = f"{serial_analysis_prompt_template}\n\n【輸入範例】\n- DDL: {ddl_list[0] if ddl_list else 'N/A'}\n- 候選欄位: {first_candidate_col}\n- 欄位資料樣本:\n" + "\n".join(sampled_data)
+                            
+                            yield f"data: {json.dumps({'type': 'info', 'message': '正在呼叫 LLM 進行流水號規則分析...'})}\n\n"
+                            serial_message_log = [vn.user_message(full_serial_prompt)]
+                            serial_number_analysis_result = vn.submit_prompt(serial_message_log)
                         else:
-                            buf = para
-                    if buf:
-                        yield buf
-                chunk_count = 0
-                total_chars = 0
-                for part in _chunk_text(final_analysis):
-                    chunk_count += 1
-                    total_chars += len(part)
-                    yield "data: " + json.dumps({'chunk': part}) + "\n\n"
-                avg_size = (total_chars / chunk_count) if chunk_count else 0
-                logger.info(f"Schema analysis chunking: parts={chunk_count}, total_chars={total_chars}, avg_size={avg_size:.1f}")
+                            serial_number_analysis_result = "取樣資料為空，無法進行分析。"
+                else:
+                    serial_number_analysis_result = "未在 QA 範例中找到潛在的流水號欄位。"
+
+            except Exception as sn_e:
+                logger.error(f"Error during serial number analysis: {sn_e}")
+                serial_number_analysis_result = f"流水號分析時發生錯誤: {sn_e}"
             
-            if final_analysis and final_analysis.strip():
+            yield f"data: {json.dumps({'type': 'serial_number_analysis_result', 'content': serial_number_analysis_result})}\n\n"
+
+            # 5. Save results to DB
+            if final_analysis.strip() or serial_number_analysis_result.strip():
                 with get_user_db_connection(user_id) as conn:
                     cursor = conn.cursor()
-                    cursor.execute(
-                        "REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)",
-                        (dataset_id, '__dataset_analysis__', final_analysis)
-                    )
+                    if final_analysis.strip():
+                        cursor.execute("REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)", (dataset_id, '__dataset_analysis__', final_analysis))
+                    if serial_number_analysis_result.strip():
+                         cursor.execute("REPLACE INTO training_documentation (dataset_id, table_name, documentation_text) VALUES (?, ?, ?)", (dataset_id, '__serial_number_analysis__', serial_number_analysis_result))
                     conn.commit()
-                yield "event: message\ndata: \n\n分析報告已成功儲存。\n\n"
-            else:
-                yield "event: message\ndata: \n\n分析失敗：AI 模型未返回有效內容。\n\n"
-
-            yield "event: end_of_stream\ndata: {}\n\n"
+                yield f"data: {json.dumps({'type': 'info', 'message': '分析結果已儲存。'})}\n\n"
 
         except Exception as e:
-            from flask import current_app
-            current_app.logger.error(f"Error during schema analysis stream for user '{user_id}', dataset '{dataset_id}': {e}", exc_info=True)
-            error_data = {'error': f"An internal error occurred: {e}"}
-            yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
+            logger.exception("Error during schema analysis stream")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            yield f"data: {json.dumps({'type': 'end_of_stream'})}\n\n"
 
     return Response(stream_with_context(generate_analysis_stream()), mimetype='text/event-stream')
 
