@@ -339,10 +339,11 @@ def analyze_schema():
             safe_prompt += context
             
             question = "請根據上述 DDL，生成一份全面的技術文件，詳細描述其架構與設計。"
-            message_log = [vn.system_message(safe_prompt), vn.user_message(question)]
+            # Combine system and user prompts into a single user message
+            full_prompt_for_analysis = safe_prompt + "\n\n" + question
             
             yield f"data: {json.dumps({'type': 'info', 'message': '正在呼叫 LLM 進行結構分析...'})}\n\n"
-            documentation_analysis = vn.submit_prompt(message_log)
+            documentation_analysis = vn.submit_prompt([vn.user_message(full_prompt_for_analysis)])
             
             yield f"data: {json.dumps({'type': 'analysis_result', 'content': documentation_analysis})}\n\n"
             
