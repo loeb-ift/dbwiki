@@ -1,6 +1,9 @@
 import os
 import time
 import re
+import numpy as np
+from scipy.stats import entropy
+from collections import Counter
 from sqlalchemy import create_engine, inspect, text
 
 from .db_utils import get_user_db_connection
@@ -145,6 +148,7 @@ def extract_serial_number_candidates(qa_pairs: list) -> dict:
     """
     Analyzes a list of QA pairs to find potential serial number columns.
     It looks for WHERE clauses with string literals that have a mix of letters and numbers.
+    Returns a dictionary mapping column name to table name.
     """
     # Regex to find patterns like: WHERE column_name = 'string' OR WHERE column_name LIKE 'string%'
     where_clause_pattern = re.compile(r"WHERE\s+`?(\w+)`?\s*(?:=|LIKE)\s*'([^']+)'", re.IGNORECASE)
@@ -155,11 +159,11 @@ def extract_serial_number_candidates(qa_pairs: list) -> dict:
         return candidates
 
     for qa in qa_pairs:
-        # qa_pairs from cursor.fetchall() is a list of tuples, not dicts.
-        # Access by index. Assuming the SQL query is the second element (index 1).
-        if len(qa) < 2:
+        # qa_pairs from cursor.fetchall() is a list of tuples: (question, sql_query, table_name)
+        if len(qa) < 3:
             continue
         sql = qa[1]
+        table_name = qa[2] if qa[2] else 'global' # Use 'global' if table_name is not specified
         if not sql:
             continue
             
@@ -167,13 +171,11 @@ def extract_serial_number_candidates(qa_pairs: list) -> dict:
         for column, value in matches:
             # Basic heuristic for serial numbers: contains both digits and letters, and is between 4 and 40 chars long.
             if re.search(r"\d", value) and re.search(r"[a-zA-Z]", value) and 4 < len(value) < 40:
-                if column not in candidates:
-                    candidates[column] = []
-                if value not in candidates[column]:
-                    candidates[column].append(value)
+                # We found a potential candidate. Map the column to its table.
+                # If a column is found multiple times, this will just overwrite, which is fine.
+                candidates[column] = table_name
     
-    # Return only candidates that have at least a few examples
-    return {col: values for col, values in candidates.items() if len(values) >= 3}
+    return candidates
 
 def sample_column_data(db_path: str, table_name: str, column_name: str, sample_size: int = 100) -> list:
     """
@@ -192,3 +194,86 @@ def sample_column_data(db_path: str, table_name: str, column_name: str, sample_s
         print(f"Error sampling column {table_name}.{column_name}: {e}")
     
     return samples
+def extract_column_features(values: list = None, db_path: str = None, table_name: str = None, column_name: str = None, sample_size: int = 1000) -> dict:
+    """
+    Extracts detailed statistical features from a list of values or a database column.
+    """
+    if values:
+        samples = values
+    elif db_path and table_name and column_name:
+        samples = sample_column_data(db_path, table_name, column_name, sample_size)
+    else:
+        samples = []
+
+    if not samples:
+        return {
+            "total_samples": 0,
+            "unique_count": 0,
+            "null_count": "N/A", # Assuming sample_column_data filters out nulls
+            "length_distribution": {},
+            "character_composition": {}
+        }
+
+    # Convert all samples to string for consistent analysis
+    samples = [str(s) for s in samples]
+    
+    # Basic counts
+    total_samples = len(samples)
+    unique_count = len(set(samples))
+    
+    # Length distribution
+    lengths = [len(s) for s in samples]
+    length_dist = {
+        "min": int(np.min(lengths)) if lengths else 0,
+        "max": int(np.max(lengths)) if lengths else 0,
+        "mode": int(Counter(lengths).most_common(1)[0][0]) if lengths else 0,
+        "median": int(np.median(lengths)) if lengths else 0,
+        "std_dev": float(np.std(lengths)) if lengths else 0.0
+    }
+    
+    # Character composition
+    full_text = "".join(samples)
+    total_chars = len(full_text)
+    alpha_count = sum(c.isalpha() for c in full_text)
+    digit_count = sum(c.isdigit() for c in full_text)
+    symbol_count = total_chars - alpha_count - digit_count
+    
+    char_comp = {
+        "alpha_ratio": round(alpha_count / total_chars, 2) if total_chars > 0 else 0,
+        "digit_ratio": round(digit_count / total_chars, 2) if total_chars > 0 else 0,
+        "symbol_ratio": round(symbol_count / total_chars, 2) if total_chars > 0 else 0,
+    }
+
+    # Positional analysis (entropy)
+    positional_analysis = []
+    if samples:
+        max_len = length_dist['max']
+        for i in range(max_len):
+            chars_at_pos = [s[i] for s in samples if len(s) > i]
+            if chars_at_pos:
+                # Calculate entropy
+                counts = Counter(chars_at_pos)
+                probabilities = [count / len(chars_at_pos) for count in counts.values()]
+                pos_entropy = entropy(probabilities, base=2)
+                
+                # Determine dominant type
+                pos_types = Counter([
+                    'letter' if c.isalpha() else 'digit' if c.isdigit() else 'symbol'
+                    for c in chars_at_pos
+                ])
+                dominant_type = pos_types.most_common(1)[0][0]
+
+                positional_analysis.append({
+                    "pos": i,
+                    "type": dominant_type,
+                    "entropy": round(pos_entropy, 2)
+                })
+    char_comp["position_analysis"] = positional_analysis
+
+    return {
+        "total_samples": total_samples,
+        "unique_count": unique_count,
+        "null_count": 0, # sample_column_data filters nulls
+        "length_distribution": length_dist,
+        "character_composition": char_comp
+    }

@@ -132,8 +132,18 @@ def activate_dataset():
                 ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
                 if ddl: ddl_statements.append(ddl + ";")
 
-        training_data = vn.get_training_data()
-        is_trained = not training_data.empty if training_data is not None else False
+        # Check if the dataset has any training data to determine the 'is_trained' status
+        with get_user_db_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    (SELECT COUNT(*) FROM training_ddl WHERE dataset_id = :dataset_id) +
+                    (SELECT COUNT(*) FROM training_documentation WHERE dataset_id = :dataset_id) +
+                    (SELECT COUNT(*) FROM training_qa WHERE dataset_id = :dataset_id)
+            """, {'dataset_id': dataset_id})
+            total_training_entries = cursor.fetchone()[0]
+        
+        is_trained = total_training_entries > 0
 
         return jsonify({
             'status': 'success', 

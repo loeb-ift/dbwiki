@@ -108,7 +108,8 @@
                 </div>
                 <div class="form-group" style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
                     <label for="qa-file-input">或上傳檔案生成 (.sql):</label>
-                    <input type="file" id="qa-file-input" accept=".sql" onchange="handleQaFileUpload(event)">
+                    <input type="file" id="qa-file-input" accept=".sql">
+                    <button type="button" id="upload-qa-btn" onclick="uploadQaFile()" style="margin-left: 10px;">上傳並生成</button>
                 </div>
                 <div id="qa-upload-progress-container" style="margin-top: 10px; display: none;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
@@ -147,7 +148,6 @@
                 <h3>資料庫自動分析</h3>
                 <p>點擊按鈕，讓 AI 自動分析當前資料庫的結構，並生成建議文件。</p>
                 <button id="analyze-schema-btn" type="button" onclick="analyzeSchema()">自動分析資料庫結構</button>
-                <div id="schema-analysis-output" style="margin-top: 1em;"></div>
             </div>
         </div>
 
@@ -200,9 +200,16 @@
                     </div>
                 </div>
                 <div id="analysis-container" style="margin-top: 1.5em; display: none;">
-                    <div class="scrollable-table-container">
-                        <h3>思考結果：</h3>
-                        <div id="analysis-output"></div>
+                    <h3>SQL 生成問題：思考過程分析</h3>
+                    <div id="original-question-container" style="margin-bottom: 1em;">
+                        <h4>1. 原始問題</h4>
+                        <p id="original-question-display" style="background-color: #f8f8f8; padding: 0.5em; border-radius: 4px;"></p>
+                    </div>
+                    <div id="thinking-process-container">
+                        <h4>2. 思考過程分析表</h4>
+                        <div class="scrollable-table-container">
+                            <div id="analysis-output"></div>
+                        </div>
                     </div>
                 </div>
                 <div id="sql-container" style="display: none;">

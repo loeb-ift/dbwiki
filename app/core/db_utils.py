@@ -113,7 +113,6 @@ def _insert_default_prompts(conn: sqlite3.Connection):
 
         prompt_descriptions = {
             'sql_generation': '（核心）指導 AI 如何根據上下文生成 SQL 查詢。',
-            'analysis': '（核心）指導 AI 對資料庫的所有訓練資料進行全面的元分析。',
             'documentation': '（核心）指導 AI 作為架構師，從 DDL 逆向工程生成技術文件。',
             'qa_generation_system': '（核心）指導 AI 作為領域專家，從一批 SQL 反向生成高品質的業務問題。',
             'followup_question_generation': '指導 AI 在查詢後生成相關的後續問題。',
@@ -121,26 +120,37 @@ def _insert_default_prompts(conn: sqlite3.Connection):
             'question_rewriting': '指導 AI 在多輪對話中合併相關問題。',
             'plotly_generation': '指導 AI 根據查詢結果生成視覺化圖表程式碼。',
             'sql_explanation': '指導 AI 解釋 SQL 查詢的含義。',
+            'serial_number_candidate_generation': '（第一階段）指導 AI 從 DDL、文件和 QA 中推斷潛在的流水號欄位。',
+            'pattern_and_template_generation': '（第三、四階段）指導 AI 進行模式識別與模板生成。'
         }
 
-        for prompt_type, prompt_content in default_prompts_content.items():
-            # First, check if a prompt with the given type and global status already exists.
-            cursor.execute("SELECT COUNT(*) FROM training_prompts WHERE prompt_type = ? AND is_global = 1", (prompt_type,))
-            if cursor.fetchone()[0] > 0:
-                logger.debug(f"Default prompt for type '{prompt_type}' already exists. Skipping.")
-                continue
+        # First, remove any default prompts that are no longer in the default JSON file.
+        # This cleans up obsolete prompts from previous versions.
+        default_prompt_types = list(default_prompts_content.keys())
+        # Create placeholders for the query
+        placeholders = ', '.join('?' for _ in default_prompt_types)
+        cursor.execute(f"DELETE FROM training_prompts WHERE is_global = 1 AND prompt_type NOT IN ({placeholders})", default_prompt_types)
+        deleted_count = cursor.rowcount
+        if deleted_count > 0:
+            logger.info(f"Removed {deleted_count} obsolete default prompt(s).")
 
-            # If not, proceed with insertion.
+        for prompt_type, prompt_content in default_prompts_content.items():
+            # Use INSERT OR IGNORE to simplify the logic.
+            # This will insert if the prompt doesn't exist, and do nothing if it does.
+            # We'll update the content and description afterwards to ensure they are current.
             prompt_name = f"{prompt_type}_prompt"
             description = prompt_descriptions.get(prompt_type, "預設提示詞。")
-            try:
-                cursor.execute(
-                    "INSERT INTO training_prompts (prompt_name, prompt_content, prompt_type, prompt_description, is_global) VALUES (?, ?, ?, ?, ?)",
-                    (prompt_name, prompt_content, prompt_type, description, 1)
-                )
-            except sqlite3.IntegrityError:
-                # This is a fallback, in case of race conditions in a multi-threaded environment.
-                logger.warning(f"Default prompt '{prompt_name}' with type '{prompt_type}' already exists. Skipping.")
+            
+            # Upsert logic: Insert or ignore, then update.
+            cursor.execute(
+                "INSERT OR IGNORE INTO training_prompts (prompt_name, prompt_content, prompt_type, prompt_description, is_global) VALUES (?, ?, ?, ?, ?)",
+                (prompt_name, prompt_content, prompt_type, description, 1)
+            )
+            # Always update to ensure the content and description are the latest from the default file.
+            cursor.execute(
+                "UPDATE training_prompts SET prompt_content = ?, prompt_description = ? WHERE prompt_type = ? AND is_global = 1",
+                (prompt_content, description, prompt_type)
+            )
     except Exception as e:
         logger.error(f"Failed to initialize default prompts from file: {e}")
 

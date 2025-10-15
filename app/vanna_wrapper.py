@@ -114,6 +114,30 @@ class MyVanna(BaseMyVanna):
     def set_dataset(self, dataset_name):
         self.current_dataset = dataset_name
         
+    def get_training_data(self, dataset_id: str) -> tuple[list, list, list]:
+        """
+        從資料庫中獲取指定資料集的所有訓練資料。
+        """
+        from app.core.db_utils import get_user_db_connection
+        
+        ddl_list, doc_list, qa_list = [], [], []
+        with get_user_db_connection(self.user_id) as conn:
+            cursor = conn.cursor()
+            
+            # 獲取 DDL
+            cursor.execute("SELECT ddl_statement FROM training_ddl WHERE dataset_id = ?", (dataset_id,))
+            ddl_list = [row[0] for row in cursor.fetchall()]
+            
+            # 獲取文件
+            cursor.execute("SELECT documentation_text FROM training_documentation WHERE dataset_id = ?", (dataset_id,))
+            doc_list = [row[0] for row in cursor.fetchall() if row[0]]
+            
+            # 獲取 QA 配對
+            cursor.execute("SELECT question, sql_query FROM training_qa WHERE dataset_id = ?", (dataset_id,))
+            qa_list = [{'question': row[0], 'sql': row[1]} for row in cursor.fetchall()]
+            
+        return ddl_list, doc_list, qa_list
+
     # This method signature is intentionally designed to accept ANY keyword arguments
     # and ignore them to prevent TypeError when unexpected parameters like 'initial_prompt' are passed
     def get_similar_question_sql(self, question, n=5, *args, **kwargs):

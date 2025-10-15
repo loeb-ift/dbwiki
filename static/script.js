@@ -193,9 +193,12 @@ async function loadTrainingDataForTable(tableName, page = 1) {
         
         const docOutputSection = document.getElementById('documentation-output-section');
         const docOutput = document.getElementById('documentation-output');
-        if (tableName === 'global' && data.dataset_analysis && docOutputSection && docOutput) {
-            docOutput.textContent = data.dataset_analysis;
-            docOutputSection.style.display = 'block';
+        const serialOutput = document.getElementById('serial-number-analysis-output');
+
+        if (tableName === 'global' && (data.dataset_analysis || data.serial_number_analysis)) {
+            if (docOutput) docOutput.innerHTML = data.dataset_analysis ? marked.parse(data.dataset_analysis) : '<i>尚無結構分析。</i>';
+            if (serialOutput) serialOutput.innerHTML = data.serial_number_analysis ? marked.parse(data.serial_number_analysis) : '<i>尚無流水號分析。</i>';
+            if (docOutputSection) docOutputSection.style.display = 'block';
         } else if (tableName === 'global' && docOutputSection) {
             docOutputSection.style.display = 'none';
         }
@@ -496,6 +499,87 @@ async function batchDeleteQaRows() {
     }
 }
 
+function uploadQaFile() {
+    const fileInput = document.getElementById('qa-file-input');
+    const file = fileInput.files[0];
+    if (!file) {
+        alert('請先選擇一個 .sql 檔案。');
+        return;
+    }
+
+    const progressContainer = document.getElementById('qa-upload-progress-container');
+    const progressBar = document.getElementById('qa-upload-progress-bar');
+    const percentageText = document.getElementById('qa-upload-percentage');
+    const logContainer = document.getElementById('qa-gen-log-container');
+    const logOutput = document.getElementById('qa-gen-log');
+
+    if (progressContainer) progressContainer.style.display = 'block';
+    if (progressBar) progressBar.style.width = '0%';
+    if (percentageText) percentageText.textContent = '0%';
+    if (logContainer) logContainer.style.display = 'block';
+    if (logOutput) logOutput.textContent = '開始上傳並生成問答配對...\n';
+
+    const formData = new FormData();
+    formData.append('sql_file', file);
+
+    fetch('/api/generate_qa_from_sql', {
+        method: 'POST',
+        headers: {
+            'Dataset-Id': activeDatasetId
+        },
+        body: formData
+    })
+    .then(response => {
+        if (!response.body) {
+            throw new Error('伺服器回應無效。');
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        function push() {
+            reader.read().then(({ done, value }) => {
+                if (done) {
+                    if (logOutput) logOutput.textContent += '所有問答已生成完畢。\n';
+                    loadTrainingDataForTable(activeTable, 1); // Refresh the table
+                    return;
+                }
+                const chunk = decoder.decode(value, { stream: true });
+                chunk.split('\n\n').forEach(event => {
+                    if (!event.startsWith('data: ')) return;
+                    try {
+                        const data = JSON.parse(event.substring(6));
+                        if (logOutput) logOutput.textContent += `${data.message}\n`;
+                        if (progressBar && data.percentage) {
+                            progressBar.style.width = `${data.percentage}%`;
+                        }
+                        if (percentageText && data.percentage) {
+                            percentageText.textContent = `${data.percentage}%`;
+                        }
+                        if (data.status === 'progress' && data.qa_pair) {
+                            addQaPairRow(data.qa_pair);
+                        }
+                    } catch (e) {
+                        console.warn('解析生成日誌失敗:', e, 'Chunk:', event);
+                    }
+                });
+                push();
+            });
+        }
+        push();
+    })
+    .catch(error => {
+        console.error('上傳 SQL 檔案失敗:', error);
+        if (logOutput) logOutput.textContent += `錯誤: ${error.message}\n`;
+        alert(`上傳失敗: ${error.message}`);
+    });
+}
+
+// This function is now triggered by uploadQaFile, so we can keep its logic
+// but it's not directly called by an event anymore.
+function handleQaFileUpload(event) {
+    uploadQaFile();
+}
+
 // --- Training Functions ---
 async function trainModel() {
     if (!activeDatasetId) {
@@ -647,7 +731,7 @@ function openEditDatasetModal() {
 
 function closeEditDatasetModal() {
     const modal = document.getElementById('edit-dataset-modal');
-    if (modal) modal.style.display = 'none';
+if (modal) modal.style.display = 'none';
 }
 
 async function handleEditDatasetSubmit(event) {
@@ -744,8 +828,17 @@ async function ask() {
          askBtn.textContent = '思考中...';
      }
     if (statusContainer) statusContainer.textContent = '正在初始化請求...';
-     if (thinkingContainer) thinkingContainer.style.display = 'block';
-     if (thinkingOutput) thinkingOutput.innerHTML = '';
+    if (thinkingContainer) thinkingContainer.style.display = 'none'; // Hide old thinking container
+    if (analysisContainer) analysisContainer.style.display = 'block'; // Show new analysis container
+    
+    const originalQuestionDisplay = document.getElementById('original-question-display');
+    if (originalQuestionDisplay) {
+        originalQuestionDisplay.textContent = question;
+    }
+    const analysisOutput = document.getElementById('analysis-output');
+    if (analysisOutput) {
+        analysisOutput.innerHTML = '';
+    }
  
      // Hide all result containers initially
      [resultContainer, chartContainer, analysisContainer, followupContainer, sqlErrorContainer].forEach(el => {
@@ -1196,7 +1289,7 @@ async function analyzeSchema() {
     try {
         const response = await fetch('/api/analyze_schema', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'Dataset-Id': activeDatasetId },
             body: JSON.stringify({ streaming: true })
         });
 
@@ -1224,19 +1317,10 @@ async function analyzeSchema() {
                         const p = document.createElement('p');
                         p.innerHTML = `<i>${data.message}</i>`;
                         if(docOutput) docOutput.appendChild(p);
-                    } else if (data.type === 'context') {
-                         if(docOutput) {
-                            const h4 = document.createElement('h4');
-                            h4.textContent = `上下文: ${data.subtype}`;
-                            const pre = document.createElement('pre');
-                            pre.textContent = JSON.stringify(data.content, null, 2);
-                            docOutput.appendChild(h4);
-                            docOutput.appendChild(pre);
-                         }
                     } else if (data.type === 'analysis_result') {
-                        if(docOutput) docOutput.innerHTML = `<pre>${data.content}</pre>`;
+                        if(docOutput && window.marked) docOutput.innerHTML = marked.parse(data.content);
                     } else if (data.type === 'serial_number_analysis_result') {
-                        if(serialOutput) serialOutput.innerHTML = `<pre>${data.content}</pre>`;
+                        if(serialOutput && window.marked) serialOutput.innerHTML = marked.parse(data.content);
                     } else if (data.type === 'end_of_stream') {
                         if(serialOutput && !serialOutput.innerHTML) {
                             serialOutput.innerHTML = '<p>未找到或無法分析流水號規則。</p>';
@@ -1283,6 +1367,7 @@ window.deletePrompt = deletePrompt;
 window.resetPromptToDefault = resetPromptToDefault;
 window.selectAllQaRows = selectAllQaRows;
 window.batchDeleteQaRows = batchDeleteQaRows;
+window.uploadQaFile = uploadQaFile;
 
 // --- DOM Ready ---
 if (document.readyState === 'loading') {

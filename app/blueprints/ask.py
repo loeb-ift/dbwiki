@@ -58,30 +58,6 @@ def ask_question():
                 if related_docs:
                     vn_instance.log_queue.put({'type': 'retrieved_context', 'subtype': 'documentation', 'content': related_docs})
 
-                # 2. Perform the analysis step
-                vn_instance.log_queue.put({'type': 'info', 'content': "正在請求 LLM 進行綜合分析..."})
-                
-                # Format context for the analysis prompt
-                similar_qa_str = "\n".join([f"Question: {qa['question']}\nSQL: {qa['sql']}" for qa in similar_qa]) if similar_qa else "無"
-                related_ddl_str = "\n".join(related_ddl) if related_ddl else "無"
-                related_docs_str = "\n".join(related_docs) if related_docs else "無"
-
-                try:
-                    analysis_prompt_template = vn.get_prompt('analysis')
-                except Exception:
-                    analysis_prompt_template = "請根據以下信息，為生成 SQL 提供一個詳細的思考過程分析表。\n"
-
-                analysis_prompt_content = f"""
-                原始問題: {question}
-                檢索到的相似問題與 SQL 範例: {similar_qa_str}
-                檢索到的相關資料庫結構 (DDL): ```sql\n{related_ddl_str}\n```
-                檢索到的相關業務文件: {related_docs_str}
-                """
-                full_analysis_prompt = analysis_prompt_template + analysis_prompt_content
-                
-                analysis_result = vn.submit_prompt([{'role': 'user', 'content': full_analysis_prompt}])
-                vn_instance.log_queue.put({'type': 'explanation', 'content': analysis_result})
-
                 # 3. Generate SQL
                 sql = None
                 if similar_qa and similar_qa[0].get('similarity', 0) > 0.95:
@@ -89,12 +65,14 @@ def ask_question():
                     vn_instance.log_queue.put({'type': 'info', 'content': f"找到高度相似的已存問題，直接使用其 SQL。"})
                 else:
                     vn_instance.log_queue.put({'type': 'info', 'content': "正在請求 LLM 生成新的 SQL..."})
-                    sql = vn.generate_sql(
+                    # The vn.generate_sql method is a generator, so we need to iterate over it.
+                    sql_generator = vn.generate_sql(
                         question=question,
                         ddl_list=related_ddl,
                         doc_list=related_docs,
                         question_sql_list=similar_qa
                     )
+                    sql = "".join(sql_generator)
                 
                 vn_instance.log_queue.put({'type': 'sql', 'content': sql})
                 write_ask_log(user_id, "generated_sql", sql)

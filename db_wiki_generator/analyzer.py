@@ -47,6 +47,7 @@ def analyze_schema(raw_schema: Dict[str, Any]) -> Dict[str, Any]:
 
     print("Schema analysis completed.")
     return enriched_schema
+    return enriched_schema
 
 def _infer_semantics(name: str, tech_type: str, is_pk: bool) -> (str, List[str]):
     """
