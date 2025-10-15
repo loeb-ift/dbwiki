@@ -298,7 +298,13 @@ def analyze_schema():
             # 1. Generate Schema Documentation
             documentation_prompt = load_prompt_template('documentation')
             safe_prompt = (documentation_prompt or "").replace('＠', '@')
-            if ddl_list: safe_prompt += "\n\n===Tables (DDL)===\n" + "\n\n".join(ddl_list)
+            if ddl_list:
+                safe_prompt += "\n\n===Tables (DDL)===\n" + "\n\n".join(ddl_list)
+            if doc_list:
+                safe_prompt += "\n\n===Documentation===\n" + "\n\n".join(doc_list)
+            if qa_list:
+                qa_context = "\n".join([f"Q: {qa['question']}\nSQL: {qa['sql']}" for qa in qa_list])
+                safe_prompt += "\n\n===Question/Answer Pairs===\n" + qa_context
             
             question = "請根據上述 DDL，生成一份全面的技術文件，詳細描述其架構與設計。"
             message_log = [vn.system_message(safe_prompt), vn.user_message(question)]
