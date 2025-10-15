@@ -27,7 +27,10 @@ function throttle(func, limit) {
 async function apiFetch(url, options = {}) {
     try {
         options.headers = options.headers || {};
-        if (!(options.body instanceof FormData) && !options.headers['Content-Type'] && options.body) {
+        if (options.body instanceof FormData) {
+            // Let the browser set the Content-Type header for FormData
+            delete options.headers['Content-Type'];
+        } else if (!options.headers['Content-Type'] && options.body) {
             options.headers['Content-Type'] = 'application/json';
         }
         if (activeDatasetId !== null && activeDatasetId !== undefined) {
@@ -742,21 +745,25 @@ async function handleNewDatasetSubmit(event) {
     }
 }
 
-function openEditDatasetModal() {
+async function openEditDatasetModal() {
     const modal = document.getElementById('edit-dataset-modal');
     const selector = document.getElementById('dataset-selector');
     if (!modal || !selector || !selector.value) return;
 
+    const datasetId = selector.value;
     const selectedOption = selector.options[selector.selectedIndex];
     const datasetName = selectedOption.text.split(' (')[0];
     
     const idField = document.getElementById('edit-dataset-id');
     const nameField = document.getElementById('edit-dataset-name');
 
-    if (idField) idField.value = selector.value;
+    if (idField) idField.value = datasetId;
     if (nameField) nameField.value = datasetName;
     
     modal.style.display = 'flex';
+
+    // Fetch and render the current list of files
+    await renderCurrentFilesList(datasetId);
 }
 
 function closeEditDatasetModal() {
@@ -803,6 +810,111 @@ async function handleEditDatasetSubmit(event) {
         if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.textContent = '儲存修改';
+        }
+    }
+}
+
+async function renderCurrentFilesList(datasetId) {
+    const listContainer = document.getElementById('current-files-list');
+    if (!listContainer) return;
+    listContainer.innerHTML = '<p><i>正在加載檔案列表...</i></p>';
+
+    try {
+        const result = await apiFetch(`/api/datasets/${datasetId}/tables`);
+        const tables = result.table_names || [];
+        
+        listContainer.innerHTML = ''; // Clear loading message
+        
+        if (tables.length === 0) {
+            listContainer.innerHTML = '<p>此資料集目前沒有檔案。</p>';
+            return;
+        }
+
+        tables.forEach(tableName => {
+            const fileElement = document.createElement('div');
+            fileElement.style.display = 'flex';
+            fileElement.style.justifyContent = 'space-between';
+            fileElement.style.alignItems = 'center';
+            fileElement.style.marginBottom = '5px';
+            fileElement.style.padding = '5px';
+            fileElement.style.border = '1px solid #eee';
+            fileElement.style.borderRadius = '4px';
+            
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = tableName + '.csv';
+            
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = '刪除';
+            deleteBtn.style.backgroundColor = '#dc3545';
+            deleteBtn.style.padding = '3px 8px';
+            deleteBtn.style.fontSize = '0.8em';
+            deleteBtn.onclick = () => deleteTableFromDataset(datasetId, tableName);
+            
+            fileElement.appendChild(nameSpan);
+            fileElement.appendChild(deleteBtn);
+            listContainer.appendChild(fileElement);
+        });
+    } catch (error) {
+        listContainer.innerHTML = `<p style="color: red;">加載檔案列表失敗: ${error.message}</p>`;
+    }
+}
+
+async function deleteTableFromDataset(datasetId, tableName) {
+    if (!confirm(`確定要從此資料集中刪除檔案 "${tableName}.csv" 嗎？`)) return;
+
+    try {
+        await apiFetch(`/api/datasets/files?dataset_id=${datasetId}`, {
+            method: 'DELETE',
+            body: JSON.stringify({ table_name: tableName })
+        });
+        alert(`檔案 "${tableName}.csv" 已成功刪除。`);
+        await renderCurrentFilesList(datasetId); // Refresh the list
+    } catch (error) {
+        console.error('刪除檔案失敗:', error);
+        alert(`刪除檔案失敗: ${error.message}`);
+    }
+}
+
+
+async function addFilesToDataset() {
+    const fileInput = document.getElementById('edit-dataset-files');
+    const files = fileInput.files;
+    const datasetId = document.getElementById('edit-dataset-id').value;
+
+    if (!files.length) {
+        alert('請先選擇要添加的 CSV 檔案。');
+        return;
+    }
+    if (!datasetId) {
+        alert('無效的資料集 ID。');
+        return;
+    }
+
+    const formData = new FormData();
+    for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i]);
+    }
+
+    const addBtn = document.getElementById('add-file-btn');
+    if(addBtn) {
+        addBtn.disabled = true;
+        addBtn.textContent = '添加中...';
+    }
+
+    try {
+        const result = await apiFetch(`/api/datasets/files?dataset_id=${datasetId}`, {
+            method: 'POST',
+            body: formData
+        });
+        alert(result.message || '檔案添加成功！');
+        fileInput.value = ''; // Clear the file input
+        await renderCurrentFilesList(datasetId); // Refresh the list
+    } catch (error) {
+        console.error('添加檔案失敗:', error);
+    } finally {
+        if(addBtn) {
+            addBtn.disabled = false;
+            addBtn.textContent = '添加文件';
         }
     }
 }
@@ -1259,6 +1371,7 @@ function setupEventListeners() {
     document.getElementById('delete-dataset-btn')?.addEventListener('click', deleteDataset);
     document.getElementById('new-dataset-form')?.addEventListener('submit', handleNewDatasetSubmit);
     document.getElementById('edit-dataset-form')?.addEventListener('submit', handleEditDatasetSubmit);
+    document.getElementById('add-file-btn')?.addEventListener('click', addFilesToDataset);
     document.querySelector('#new-dataset-modal .close-btn')?.addEventListener('click', closeNewDatasetModal);
     document.querySelector('#edit-dataset-modal .close-btn')?.addEventListener('click', closeEditDatasetModal);
 
@@ -1378,6 +1491,7 @@ async function analyzeSchema() {
 window.analyzeSchema = analyzeSchema;
 window.handleNewDatasetSubmit = handleNewDatasetSubmit;
 window.handleEditDatasetSubmit = handleEditDatasetSubmit;
+window.addFilesToDataset = addFilesToDataset;
 window.openNewDatasetModal = openNewDatasetModal;
 window.closeNewDatasetModal = closeNewDatasetModal;
 window.openEditDatasetModal = openEditDatasetModal;

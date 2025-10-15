@@ -191,7 +191,7 @@ def handle_dataset_files():
     
     if request.method == 'POST':
         files = request.files.getlist('files')
-        if not files:
+        if not files or all(f.filename == '' for f in files):
             return jsonify({'status': 'error', 'message': 'No files uploaded.'}), 400
         
         try:
@@ -199,12 +199,15 @@ def handle_dataset_files():
             added_tables = []
             
             for file in files:
-                if not file.name.endswith('.csv'):
+                if not file.filename.endswith('.csv'):
                     continue
                 
                 df = pd.read_csv(file.stream)
                 table_name = os.path.splitext(secure_filename(file.filename))[0].replace('-', '_').replace(' ', '_')
-                df.to_sql(table_name, engine, index=False, if_exists='replace')
+                with engine.connect() as connection:
+                    connection.execute(text(f'DROP TABLE IF EXISTS "{table_name}"'))
+                    connection.commit()
+                df.to_sql(table_name, engine, index=False, if_exists='append')
                 added_tables.append(table_name)
             
             tables_info, _ = get_dataset_tables(user_id, dataset_id)

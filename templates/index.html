@@ -252,7 +252,7 @@
                 <h3>CSV 文件管理</h3>
                 <div style="margin-bottom:1em;">
                     <p>添加新的 CSV 文件到資料集:</p>
-                    <input type="file" id="edit-dataset-files" accept=".csv"><br>
+                    <input type="file" id="edit-dataset-files" name="files" accept=".csv" multiple><br>
                     <button type="button" id="add-file-btn" style="margin-top: 10px;">添加文件</button>
                 </div>
                 
@@ -312,6 +312,6 @@
 
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="/static/script.js"></script>
+    <script src="/static/script.js?v=1.4"></script>
 </body>
 </html>
