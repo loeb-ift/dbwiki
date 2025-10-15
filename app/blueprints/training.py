@@ -9,6 +9,42 @@ from app.core.db_utils import get_user_db_connection
 from app.vanna_wrapper import get_vanna_instance, configure_vanna_for_request
 from app.core.helpers import load_prompt_template, get_dataset_tables, extract_column_features
 
+def build_limited_context(ddl_list, doc_list, qa_list, max_length=6000):
+    """Builds a context string with a specified max length."""
+    context_parts = []
+    current_length = 0
+
+    # Priority: DDL > QA > Docs
+    # Add DDL
+    if ddl_list:
+        ddl_str = "\n\n".join(ddl_list)
+        if current_length + len(ddl_str) < max_length:
+            context_parts.append(f"===Tables (DDL)===\n{ddl_str}")
+            current_length += len(ddl_str)
+
+    # Add QA
+    if qa_list:
+        qa_str = "\n".join([f"Q: {qa['question']}\nSQL: {qa['sql']}" for qa in qa_list])
+        if current_length + len(qa_str) < max_length:
+            context_parts.append(f"\n\n===Question/Answer Pairs===\n{qa_str}")
+            current_length += len(qa_str)
+        else:
+            remaining_space = max_length - current_length
+            context_parts.append(f"\n\n===Question/Answer Pairs (truncated)===\n{qa_str[:remaining_space]}")
+            current_length = max_length
+    
+    # Add Docs
+    if doc_list and current_length < max_length:
+        doc_str = "\n\n".join(doc_list)
+        if current_length + len(doc_str) < max_length:
+            context_parts.append(f"\n\n===Documentation===\n{doc_str}")
+            current_length += len(doc_str)
+        else:
+            remaining_space = max_length - current_length
+            context_parts.append(f"\n\n===Documentation (truncated)===\n{doc_str[:remaining_space]}")
+
+    return "\n\n".join(context_parts)
+
 # 配置日志记录器
 logger = logging.getLogger(__name__)
 training_bp = Blueprint('training', __name__, url_prefix='/api')
@@ -298,13 +334,9 @@ def analyze_schema():
             # 1. Generate Schema Documentation
             documentation_prompt = load_prompt_template('documentation')
             safe_prompt = (documentation_prompt or "").replace('＠', '@')
-            if ddl_list:
-                safe_prompt += "\n\n===Tables (DDL)===\n" + "\n\n".join(ddl_list)
-            if doc_list:
-                safe_prompt += "\n\n===Documentation===\n" + "\n\n".join(doc_list)
-            if qa_list:
-                qa_context = "\n".join([f"Q: {qa['question']}\nSQL: {qa['sql']}" for qa in qa_list])
-                safe_prompt += "\n\n===Question/Answer Pairs===\n" + qa_context
+            # Build limited context for the first LLM call
+            context = build_limited_context(ddl_list, doc_list, qa_list)
+            safe_prompt += context
             
             question = "請根據上述 DDL，生成一份全面的技術文件，詳細描述其架構與設計。"
             message_log = [vn.system_message(safe_prompt), vn.user_message(question)]
@@ -327,7 +359,9 @@ def analyze_schema():
                 if qa_list: discovery_context += "=== SQL 問答範例 ===\n" + "\n".join([f"Q: {qa['question']}\nSQL: {qa['sql']}" for qa in qa_list]) + "\n\n"
 
                 discovery_prompt = load_prompt_template('serial_number_candidate_generation')
-                full_discovery_prompt = discovery_prompt + "\n\n" + discovery_context
+                # Build limited context for the second LLM call as well
+                context_for_discovery = build_limited_context(ddl_list, doc_list, qa_list)
+                full_discovery_prompt = discovery_prompt + "\n\n" + context_for_discovery
                 
                 llm_response_str = vn.submit_prompt([vn.user_message(full_discovery_prompt)])
                 
@@ -385,6 +419,13 @@ def analyze_schema():
 
                 final_prompt_template = load_prompt_template('pattern_and_template_generation')
                 final_context = json.dumps({"候選欄位": enriched_candidates}, ensure_ascii=False, indent=2)
+                
+                # Add a length check for the generated context
+                MAX_CONTEXT_LENGTH = 6000
+                if len(final_context) > MAX_CONTEXT_LENGTH:
+                    yield f"data: {json.dumps({'type': 'warning', 'message': f'階段三的上下文長度 ({len(final_context)}) 超過限制，將進行截斷。結果可能不完整。'})}\n\n"
+                    final_context = final_context[:MAX_CONTEXT_LENGTH]
+
                 full_final_prompt = final_prompt_template + "\n\n" + final_context
 
                 serial_number_analysis_result = vn.submit_prompt([vn.user_message(full_final_prompt)])
