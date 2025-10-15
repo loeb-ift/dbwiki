@@ -8,6 +8,7 @@ import re
 from app.core.db_utils import get_user_db_connection
 from app.vanna_wrapper import get_vanna_instance, configure_vanna_for_request
 from app.core.helpers import load_prompt_template, get_dataset_tables, extract_column_features
+from app.utils.decorators import login_required
 
 def build_limited_context(ddl_list, doc_list, qa_list, max_length=6000):
     """Builds a context string with a specified max length."""
@@ -50,6 +51,7 @@ logger = logging.getLogger(__name__)
 training_bp = Blueprint('training', __name__, url_prefix='/api')
 
 @training_bp.route('/training_data', methods=['GET'])
+@login_required
 def get_training_data():
     user_id = session['username']
     logger.debug(f"get_training_data called with user_id: '{user_id}'")
@@ -114,6 +116,7 @@ def get_training_data():
     return jsonify(response_data)
 
 @training_bp.route('/save_documentation', methods=['POST'])
+@login_required
 def save_documentation():
     user_id = session['username']
     logger.debug(f"save_documentation called with user_id: '{user_id}'")
@@ -144,6 +147,7 @@ def save_documentation():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @training_bp.route('/add_qa_question', methods=['POST'])
+@login_required
 def add_qa_question():
     user_id = session['username']
     logger.debug(f"add_qa_question called with user_id: '{user_id}'")
@@ -173,6 +177,7 @@ def add_qa_question():
         return jsonify({'status': 'error', 'message': f"Database error: {e}"}), 500
 
 @training_bp.route('/train', methods=['POST'])
+@login_required
 def train_model():
     user_id = session['username']
     logger.debug(f"train_model called with user_id: '{user_id}'")
@@ -261,6 +266,7 @@ def train_model():
     return Response(stream_with_context(generate_progress()), mimetype='text/event-stream')
 
 @training_bp.route('/generate_qa_from_sql', methods=['POST'])
+@login_required
 def generate_qa_from_sql():
     user_id = session['username']
     logger.debug(f"generate_qa_from_sql called with user_id: '{user_id}'")
@@ -319,6 +325,7 @@ def generate_qa_from_sql():
     return Response(stream_with_context(stream_qa_generation(sql_content)), mimetype='text/event-stream')
 
 @training_bp.route('/analyze_schema', methods=['POST'])
+@login_required
 def analyze_schema():
     user_id = session.get('username')
     dataset_id = session.get('active_dataset')
@@ -429,7 +436,24 @@ def analyze_schema():
 
                 full_final_prompt = final_prompt_template + "\n\n" + final_context
 
-                serial_number_analysis_result = vn.submit_prompt([vn.user_message(full_final_prompt)])
+                json_analysis_result = vn.submit_prompt([vn.user_message(full_final_prompt)])
+                yield f"data: {json.dumps({'type': 'info', 'message': '階段五：正在生成人類可讀的總結報告...'})}\n\n"
+
+                summary_prompt_template = load_prompt_template('serial_number_summary_generation')
+                full_summary_prompt = summary_prompt_template + "\n\n" + json_analysis_result
+                
+                summary_report = vn.submit_prompt([vn.user_message(full_summary_prompt)])
+
+                # Combine summary and JSON details into a single markdown string
+                serial_number_analysis_result = (
+                    f"{summary_report}\n\n"
+                    f"<details>\n"
+                    f"<summary>點此展開/摺疊詳細 JSON 分析結果</summary>\n\n"
+                    f"```json\n"
+                    f"{json_analysis_result}\n"
+                    f"```\n\n"
+                    f"</details>"
+                )
                 
                 yield f"data: {json.dumps({'type': 'info', 'message': '所有分析階段完成。'})}\n\n"
 
@@ -489,6 +513,7 @@ def analyze_schema():
 
 
 @training_bp.route('/delete_all_qa', methods=['POST'])
+@login_required
 def delete_all_qa():
     user_id = session['username']
     logger.debug(f"delete_all_qa called with user_id: '{user_id}'")
@@ -506,3 +531,39 @@ def delete_all_qa():
         return jsonify({'status': 'success', 'message': '所有問答配對已刪除。'})
     except sqlite3.Error as e:
         return jsonify({'status': 'error', 'message': f"資料庫錯誤: {e}"}), 500
+
+@training_bp.route('/clear_training_data', methods=['POST'])
+@login_required
+def clear_training_data():
+    user_id = session.get('username')
+    dataset_id = session.get('active_dataset')
+    logger.debug(f"clear_training_data called for user '{user_id}' and dataset '{dataset_id}'")
+
+    if not user_id or not dataset_id:
+        return jsonify({'status': 'error', 'message': 'User not logged in or no active dataset selected.'}), 400
+
+    try:
+        # Step 1: Remove data from Vanna's vector store by deleting the collection
+        vn = get_vanna_instance(user_id)
+        # We don't need to configure for a specific dataset, as we are deleting the collection
+        
+        try:
+            # Access the underlying ChromaDB client and delete the collection
+            # The collection name is expected to be the dataset_id
+            vn.vectordb.client.delete_collection(name=str(dataset_id))
+            logger.info(f"Successfully deleted ChromaDB collection '{dataset_id}' for user '{user_id}'.")
+        except Exception as e:
+            # It's possible the collection doesn't exist, which is not a critical error in a clear operation.
+            logger.warning(f"Could not delete ChromaDB collection '{dataset_id}' for user '{user_id}'. It might not exist. Error: {e}")
+
+
+
+        # Step 2: The local SQLite database containing the source of truth (QA, documentation) is NOT cleared.
+        # This allows the user to "re-train" using the existing data after the vector store is cleared.
+        logger.info(f"Vector store for dataset_id: {dataset_id} cleared. Source data in local DB is preserved.")
+
+        return jsonify({'status': 'success', 'message': '舊的向量索引已成功清除。'})
+
+    except Exception as e:
+        logger.error(f"Error clearing training data for dataset {dataset_id}: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f'清除訓練資料時發生錯誤: {e}'}), 500

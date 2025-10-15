@@ -512,11 +512,13 @@ function uploadQaFile() {
     const percentageText = document.getElementById('qa-upload-percentage');
     const logContainer = document.getElementById('qa-gen-log-container');
     const logOutput = document.getElementById('qa-gen-log');
+    const trainingLogContainer = document.getElementById('training-log-container');
 
     if (progressContainer) progressContainer.style.display = 'block';
     if (progressBar) progressBar.style.width = '0%';
     if (percentageText) percentageText.textContent = '0%';
     if (logContainer) logContainer.style.display = 'block';
+    if (trainingLogContainer) trainingLogContainer.style.display = 'none'; // Hide other log
     if (logOutput) logOutput.textContent = '開始上傳並生成問答配對...\n';
 
     const formData = new FormData();
@@ -586,22 +588,24 @@ async function trainModel() {
         alert('請先選擇一個資料集');
         return;
     }
-    
+
     const trainBtn = document.getElementById('train-model-btn');
     const logContainer = document.getElementById('training-log-container');
     const logOutput = document.getElementById('training-log');
     const progressBar = document.getElementById('training-progress-bar');
     const progressText = document.getElementById('training-percentage');
+    const qaLogContainer = document.getElementById('qa-gen-log-container');
 
     if (!trainBtn || !logContainer || !logOutput || !progressBar || !progressText) return;
-    
+
     trainBtn.disabled = true;
     trainBtn.textContent = '訓練中...';
     logContainer.style.display = 'block';
+    if (qaLogContainer) qaLogContainer.style.display = 'none'; // Hide other log
     logOutput.textContent = '';
     progressBar.style.width = '0%';
     progressText.textContent = '0%';
-    
+
     const addLog = (message) => {
         logOutput.textContent += message + '\n';
         logOutput.scrollTop = logOutput.scrollHeight;
@@ -612,45 +616,71 @@ async function trainModel() {
         progressBar.style.width = `${roundedPercentage}%`;
         progressText.textContent = `${roundedPercentage}%`;
         if (message) addLog(`[${roundedPercentage}%] ${message}`);
-    }, 250); // Update UI at most every 250ms
+    }, 250);
 
     try {
-        const response = await fetch('/api/train', { 
+        // Step 1: Clear old training data
+        addLog('正在清除舊的訓練資料...');
+        const clearResponse = await fetch('/api/clear_training_data', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Dataset-Id': activeDatasetId
+            }
+        });
+
+        if (!clearResponse.ok) {
+            const errorData = await clearResponse.json();
+            throw new Error(errorData.message || '清除舊資料失敗');
+        }
+        addLog('舊資料清除完畢，開始新的訓練...');
+
+        // Step 2: Start new training and process the stream
+        const trainResponse = await fetch('/api/train', {
             method: 'POST',
             headers: { 'Dataset-Id': activeDatasetId }
         });
 
-        if (!response.body) throw new Error('訓練響應無效');
-        
-        const reader = response.body.getReader();
+        if (!trainResponse.ok) {
+             const errorData = await trainResponse.json();
+             throw new Error(errorData.message || '啟動訓練失敗');
+        }
+        if (!trainResponse.body) throw new Error('訓練響應無效');
+
+        const reader = trainResponse.body.getReader();
         const decoder = new TextDecoder();
-        
+
         while (true) {
             const { value, done } = await reader.read();
             if (done) {
                 updateProgress(100, '訓練流程已完成。');
                 break;
             }
-            
+
             const chunk = decoder.decode(value, { stream: true });
             chunk.split('\n\n').forEach(event => {
                 if (event.startsWith('data: ')) {
                     try {
                         const data = JSON.parse(event.substring(6));
+                        if (data.type === 'error') {
+                            throw new Error(data.message);
+                        }
                         if (data.percentage !== undefined && data.message) {
                             updateProgress(data.percentage, data.message);
                         }
                     } catch (jsonError) {
-                        console.warn('解析訓練日誌失敗:', jsonError, 'Chunk:', event);
+                        // This might catch the error thrown above, so log it and rethrow
+                        console.warn('處理訓練日誌時發生錯誤:', jsonError, 'Chunk:', event);
+                        // Don't rethrow here as it might be a simple parsing error of a chunk
                     }
                 }
             });
         }
-        
+
         alert('模型訓練成功！');
         const askSection = document.getElementById('ask-section');
         if (askSection) askSection.style.display = 'block';
-        
+
     } catch (error) {
         const errorMessage = '訓練失敗：' + error.message;
         alert(errorMessage);
