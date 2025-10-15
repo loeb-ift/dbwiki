@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>編碼規則設計助手</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; background-color: #f8f9fa; color: #212529; margin: 0; padding: 2em; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 2em; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1, h2 { color: #007bff; }
+        textarea, input[type="text"] { width: 98%; padding: 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 1rem; margin-bottom: 1em; }
+        button { padding: 0.8em 1.5em; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; transition: background-color 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        .label { font-weight: bold; margin-bottom: 0.5em; display: block; }
+        #chat-history { margin-top: 2em; padding: 1.5em; background-color: #e9ecef; border: 1px solid #dee2e6; border-radius: 4px; }
+        .message { margin-bottom: 1em; padding-bottom: 1em; border-bottom: 1px solid #ced4da; }
+        .message.user { text-align: right; }
+        .message .content { white-space: pre-wrap; font-family: monospace; }
+        #follow-up-form { margin-top: 1.5em; display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>編碼規則設計助手</h1>
+        <p>請提供以下資訊，AI 將根據您的輸入，建議新的編碼前綴與規則。之後您可以針對建議結果進行提問。</p>
+        
+        <div id="input-form">
+            <label for="existing-rules" class="label">1. 企業現有編碼規範文檔 (可選)</label>
+            <textarea id="existing-rules" placeholder="貼上您公司現有的編碼規則、原則或範例..."></textarea>
+
+            <label for="new-requirements" class="label">2. 新模組業務需求描述</label>
+            <textarea id="new-requirements" placeholder="詳細描述這個新模組的功能、目標和主要業務流程..."></textarea>
+
+            <label for="existing-prefixes" class="label">3. 已有模組的前綴列表 (一行一個)</label>
+            <textarea id="existing-prefixes" placeholder="例如：\nPO (採購訂單)\nSO (銷售訂單)\nINV (庫存)"></textarea>
+
+            <button id="generate-btn" onclick="generateSuggestion()">生成編碼建議</button>
+        </div>
+
+        <div id="chat-container" style="display: none;">
+            <h2>對話式知識庫</h2>
+            <div id="chat-history"></div>
+            <div id="follow-up-form">
+                <label for="follow-up-question" class="label">針對以上建議進行提問：</label>
+                <input type="text" id="follow-up-question" placeholder="例如：如果流水號需要到 8 位數，格式應該怎麼調整？">
+                <button id="ask-follow-up-btn" onclick="askFollowUp()">提問</button>
+            </div>
+        </div>
+        <div id="loading-indicator" style="display: none;">正在處理，請稍候...</div>
+    </div>
+
+    <script>
+        let conversationHistory = [];
+
+        async function handleRequest(endpoint, payload) {
+            const generateBtn = document.getElementById('generate-btn');
+            const askBtn = document.getElementById('ask-follow-up-btn');
+            const loadingIndicator = document.getElementById('loading-indicator');
+
+            generateBtn.disabled = true;
+            askBtn.disabled = true;
+            loadingIndicator.style.display = 'block';
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                return await response.json();
+
+            } catch (error) {
+                alert('請求時發生錯誤：' + error.message);
+                return null;
+            } finally {
+                generateBtn.disabled = false;
+                askBtn.disabled = false;
+                loadingIndicator.style.display = 'none';
+            }
+        }
+
+        function renderHistory() {
+            const historyContainer = document.getElementById('chat-history');
+            historyContainer.innerHTML = '';
+            conversationHistory.forEach(msg => {
+                const messageDiv = document.createElement('div');
+                messageDiv.classList.add('message', msg.role);
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.classList.add('content');
+                contentDiv.textContent = msg.content;
+                
+                messageDiv.appendChild(contentDiv);
+                historyContainer.appendChild(messageDiv);
+            });
+        }
+
+        async function generateSuggestion() {
+            const payload = {
+                rules: document.getElementById('existing-rules').value,
+                requirements: document.getElementById('new-requirements').value,
+                prefixes: document.getElementById('existing-prefixes').value,
+            };
+
+            if (!payload.requirements.trim() || !payload.prefixes.trim()) {
+                alert('請務必填寫「新模組業務需求描述」和「已有模組的前綴列表」。');
+                return;
+            }
+
+            const data = await handleRequest('/api/suggest_code', payload);
+            if (data && data.suggestion) {
+                conversationHistory = [{ role: 'assistant', content: data.suggestion }];
+                renderHistory();
+                document.getElementById('chat-container').style.display = 'block';
+                document.getElementById('follow-up-form').style.display = 'block';
+            }
+        }
+
+        async function askFollowUp() {
+            const questionInput = document.getElementById('follow-up-question');
+            const question = questionInput.value;
+            if (!question.trim()) return;
+
+            conversationHistory.push({ role: 'user', content: question });
+            renderHistory();
+            questionInput.value = '';
+
+            const payload = {
+                history: conversationHistory,
+                question: question,
+            };
+
+            const data = await handleRequest('/api/follow_up', payload);
+            if (data && data.answer) {
+                conversationHistory.push({ role: 'assistant', content: data.answer });
+                renderHistory();
+            }
+        }
+    </script>
+</body>
+</html>
