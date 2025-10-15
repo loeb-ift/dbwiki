@@ -209,6 +209,7 @@ td pre, #serial-number-analysis-output {
 
 #serial-number-analysis-output p {
     margin: 0; /* Remove default paragraph margin */
+    white-space: normal; /* Allow normal wrapping */
     word-break: break-all;
     overflow-wrap: break-word;
 }
