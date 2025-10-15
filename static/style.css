@@ -204,9 +204,13 @@ td pre, #serial-number-analysis-output {
 }
 
 #serial-number-analysis-output {
-    word-break: break-all;
-    overflow-wrap: break-word; /* Add this for better word wrapping */
     padding: 1em; /* Restore specific padding */
+}
+
+#serial-number-analysis-output p {
+    margin: 0; /* Remove default paragraph margin */
+    word-break: break-all;
+    overflow-wrap: break-word;
 }
 
 #qa-pagination-controls,
