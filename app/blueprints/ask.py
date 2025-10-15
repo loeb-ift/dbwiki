@@ -66,14 +66,21 @@ def ask_question():
                 else:
                     vn_instance.log_queue.put({'type': 'info', 'content': "正在請求 LLM 生成新的 SQL..."})
                     # The vn.generate_sql method is a generator, so we need to iterate over it.
-                    sql_generator = vn.generate_sql(
+                    # The generate_sql method now returns the full response including the thought process
+                    full_llm_response = vn.generate_sql(
                         question=question,
                         ddl_list=related_ddl,
                         doc_list=related_docs,
                         question_sql_list=similar_qa
                     )
-                    sql = "".join(sql_generator)
+                    
+                    # Log the full response to be displayed as the "thought process"
+                    vn_instance.log_queue.put({'type': 'thought', 'content': full_llm_response})
+
+                    # Extract the SQL from the full response
+                    sql = vn.extract_sql(full_llm_response)
                 
+                # Log the extracted SQL separately
                 vn_instance.log_queue.put({'type': 'sql', 'content': sql})
                 write_ask_log(user_id, "generated_sql", sql)
 

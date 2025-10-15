@@ -195,11 +195,18 @@ td textarea {
     box-sizing: border-box;
 }
 
-td pre {
+td pre, #serial-number-analysis-output {
     white-space: pre-wrap;
     background-color: #f8f8f8;
     padding: 5px;
     margin: 0;
+    font-size: 0.85em;
+}
+
+#serial-number-analysis-output {
+    word-break: break-all;
+    overflow-wrap: break-word; /* Add this for better word wrapping */
+    padding: 1em; /* Restore specific padding */
 }
 
 #qa-pagination-controls,
@@ -239,11 +246,11 @@ td pre {
 
 #analysis-container pre {
     white-space: pre-wrap;
-    word-break: break-all;
     background-color: #f8f8f8;
     padding: 1em;
     border-radius: 4px;
     max-width: 100%;
     overflow-x: auto;
+    word-break: break-all;
     font-size: 0.85em;
 }

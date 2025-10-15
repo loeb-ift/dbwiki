@@ -216,11 +216,10 @@ class MyVanna(BaseMyVanna):
 
         try:
             response = self.submit_prompt([self.user_message(final_prompt)])
-            # Assuming extract_sql is a method in the parent class or defined elsewhere
-            sql = self.extract_sql(response)
-            logger.info(f"Successfully generated SQL: {sql[:200]}...")
-            self.log_debug_info('generate_sql_complete', {'sql': sql})
-            return sql
+            # Return the full response to include the thought process
+            logger.info(f"LLM full response received. Length: {len(response)} chars.")
+            self.log_debug_info('generate_sql_full_response', {'response': response})
+            return response
         except Exception as e:
             logger.error(f"Error during final SQL generation call: {e}", exc_info=True)
             self.log_debug_info('error_generate_sql', {'error': str(e), 'traceback': traceback.format_exc()})
