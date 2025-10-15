@@ -245,4 +245,5 @@ td pre {
     border-radius: 4px;
     max-width: 100%;
     overflow-x: auto;
+    font-size: 0.85em;
 }

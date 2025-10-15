@@ -349,8 +349,8 @@ def analyze_schema():
                 
                 enriched_candidates = []
                 for i, candidate in enumerate(candidate_columns_from_llm):
-                    table = candidate.get('table_name')
-                    column = candidate.get('column_name')
+                    table = candidate.get('表格名稱')
+                    column = candidate.get('欄位名稱')
                     if not table or not column: continue
 
                     yield f"data: {json.dumps({'type': 'info', 'message': f'正在提取 {table}.{column} 的特徵...'})}\n\n"
@@ -362,14 +362,14 @@ def analyze_schema():
                     ddl = next((d for d in ddl_list if f"CREATE TABLE {table}" in d or f'CREATE TABLE "{table}"' in d), "")
                     
                     enriched_candidates.append({
-                        "rank": i + 1,
-                        "confidence_score": candidate.get('confidence_score', 0.8),
-                        "table_name": table,
-                        "column_name": column,
-                        "data_type": next((line.split()[1] for line in ddl.split('\n') if column in line), "UNKNOWN"),
+                        "排名": i + 1,
+                        "信心分數": candidate.get('信心分數', 0.8),
+                        "表格名稱": table,
+                        "欄位名稱": column,
+                        "資料類型": next((line.split()[1] for line in ddl.split('\n') if column in line), "UNKNOWN"),
                         "佐證資料": {"來自LLM的判斷依據": candidate.get('判斷依據', '')},
-                        "statistics": features,
-                        "sample_values": list(set(values_from_qa))[:10]
+                        "統計特徵": features,
+                        "樣本資料": list(set(values_from_qa))[:10]
                     })
 
                 yield f"data: {json.dumps({'type': 'info', 'message': '階段二完成：所有候選欄位的特徵提取完畢。'})}\n\n"
@@ -378,7 +378,7 @@ def analyze_schema():
                 yield f"data: {json.dumps({'type': 'info', 'message': '階段三/四：正在請求 LLM 進行模式識別與模板生成...'})}\n\n"
 
                 final_prompt_template = load_prompt_template('pattern_and_template_generation')
-                final_context = json.dumps({"candidate_columns": enriched_candidates}, ensure_ascii=False, indent=2)
+                final_context = json.dumps({"候選欄位": enriched_candidates}, ensure_ascii=False, indent=2)
                 full_final_prompt = final_prompt_template + "\n\n" + final_context
 
                 serial_number_analysis_result = vn.submit_prompt([vn.user_message(full_final_prompt)])
