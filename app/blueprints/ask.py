@@ -10,6 +10,8 @@ import threading
 import time
 import logging
 from sqlalchemy.exc import OperationalError
+import plotly.express as px # 新增导入
+import plotly.graph_objects as go # 新增导入
 
 from app.vanna_wrapper import get_vanna_instance, configure_vanna_for_request, MyVanna
 from app.core.helpers import load_prompt_template, _delete_all_ask_logs, write_ask_log
@@ -212,6 +214,7 @@ def ask_question():
                     vn_instance.log_queue.put({'type': 'info', 'content': '可點擊下載 CSV 檔案以取得完整結果。'})
                 
                 chart_code = vn.generate_plotly_code(question=question, sql=sql, df=df)
+                vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: chart_code type: {type(chart_code)}, content: {chart_code[:200]}..."}) # 添加调试日志
                 # 後端統一輸出為標準 Plotly JSON
                 plotly_spec = None
                 try:
@@ -221,12 +224,11 @@ def ask_question():
                         # 尝试执行 Python 代码以获取 Plotly 图表对象
                         local_vars = {'df': df, 'px': px, 'go': go} # 提供必要的上下文
                         exec_code = chart_code.strip()
-                        # 移除 import 语句，因为它们应该在文件顶部
-                        exec_code = re.sub(r'^(import .*|from .* import .*)\n', '', exec_code, flags=re.MULTILINE)
                         
                         # 尝试执行代码，并期望它定义一个 'fig' 变量
                         try:
-                            exec(exec_code, {'__builtins__': {}}, local_vars) # 限制内置函数
+                            # 将 px 和 go 模块本身传递给 globals 字典
+                            exec(exec_code, {'__builtins__': {}, 'px': px, 'go': go, 'df': df}, local_vars) # 限制内置函数，并添加 df
                             fig = local_vars.get('fig')
                             if fig and hasattr(fig, 'to_json'):
                                 plotly_spec = json.loads(fig.to_json())
