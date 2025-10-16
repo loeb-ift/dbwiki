@@ -1,5 +1,13 @@
 // Global State
 let activeDatasetId = null;
+// 查詢結果的客戶端分頁狀態
+const DEFAULT_DF_PAGE_SIZE = 50;
+let dfState = {
+    columns: [],
+    data: [],
+    page: 1,
+    pageSize: DEFAULT_DF_PAGE_SIZE,
+};
 let activeTable = 'global';
 let fullDdlMap = {};
 let tableNames = [];
@@ -982,16 +990,30 @@ async function ask() {
         analysisOutput.innerHTML = '';
     }
  
-     // Hide all result containers initially
-     [resultContainer, chartContainer, analysisContainer, followupContainer, sqlErrorContainer].forEach(el => {
-         if (el) {
-             el.innerHTML = '';
-             el.style.display = 'none';
-         }
-     });
+     // Hide all result containers initially，但不要清空容器的 innerHTML，避免刪掉固定子節點（例如 result-output）
+    [resultContainer, chartContainer, analysisContainer, followupContainer, sqlErrorContainer].forEach(el => {
+        if (el) {
+            el.style.display = 'none';
+        }
+    });
+    // 僅清空輸出內容節點
+    const clearById = (id) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = '';
+    };
+    clearById('analysis-output');
+    clearById('sql-output');
+    clearById('chart-output');
+    clearById('result-output');
+    clearById('followup-output');
+    clearById('sql-error-output');
+    clearById('sql-error-details');
     if(sqlContainer) {
         sqlContainer.style.display = 'none';
-        sqlContainer.innerHTML = '<pre id="sql-output"></pre>';
+        const sqlOutput = document.getElementById('sql-output');
+        if (sqlOutput) {
+            sqlOutput.textContent = '';
+        }
     }
     lastGeneratedSql = '';
 
@@ -1014,36 +1036,38 @@ async function ask() {
             const { value, done } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            chunk.split('\n\n').forEach(event => {
-                if (!event.startsWith('data: ')) return;
-                try {
-                    const data = JSON.parse(event.substring(6));
-                    handleStreamedData(data);
-                } catch (e) {
-                    console.warn('Failed to parse stream data chunk:', e);
+            let buffer = '';
+            const processBuffer = () => {
+                let boundary;
+                while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+                    const eventText = buffer.substring(0, boundary);
+                    buffer = buffer.substring(boundary + 2);
+                    if (eventText.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(eventText.substring(6));
+                            handleStreamedData(data);
+                        } catch (e) {
+                            console.warn('Failed to parse stream data chunk:', e, 'Chunk:', eventText);
+                        }
+                    }
                 }
-            });
+            };
+            
+            buffer += decoder.decode(value, { stream: true });
+            processBuffer();
         }
     } catch (error) {
         console.error('An error occurred during the ask process:', error);
         if (thinkingOutput) thinkingOutput.innerHTML += `<div style="color: red;">❌ 錯誤: ${error.message}</div>`;
         alert(`提問失敗: ${error.message}`);
-    } finally {
+        // Also restore button in case of error
         if (askBtn) {
             askBtn.disabled = false;
             askBtn.textContent = '提出問題';
         }
-       if (statusContainer) statusContainer.textContent = '流程處理完成。';
-       
-       const chartContainer = document.getElementById('chart-container');
-       if (chartContainer && chartContainer.style.display === 'none') {
-           const chartOutput = document.getElementById('chart-output');
-           if(chartOutput) {
-               chartOutput.innerHTML = '<p><i>沒有可用的圖表數據。</i></p>';
-           }
-           chartContainer.style.display = 'block';
-       }
+        if (statusContainer) {
+            statusContainer.textContent = '發生錯誤，流程已中斷。';
+        }
    }
 }
 
@@ -1093,20 +1117,105 @@ function handleStreamedData(data) {
                 sqlContainer.prepend(title);
             }
             lastGeneratedSql = content;
-            sqlOutput.textContent = content; // Set the final SQL
+            // 使用 += 來附加而不是覆蓋
+            sqlOutput.textContent += content;
             sqlContainer.style.display = 'block';
         }
     } else if (type === 'df') {
         const resultContainer = document.getElementById('result-container');
-        if (resultContainer) {
-            try {
-                const df = JSON.parse(content);
-                renderResultTable(df.data, df.columns);
-                resultContainer.style.display = 'block';
-            } catch (e) {
-                resultContainer.textContent = "無法解析查詢結果。";
+        try {
+            let df;
+            // 確保 content 是有效的，並且嘗試解析
+            if (typeof content === 'string' && content.trim().length > 0) {
+                df = JSON.parse(content);
+            } else if (content && typeof content === 'object') {
+                df = content; // 已經是物件
+            } else {
+                // 對於無效或空的 content，直接拋出錯誤
+                throw new Error(`Received invalid or empty df content. Type: ${typeof content}`);
+            }
+
+            // 如果不是 split 形狀，嘗試容錯轉換
+            if (!df || !Array.isArray(df.columns) || !Array.isArray(df.data)) {
+                // 嘗試 records: [{...}, {...}] 形狀
+                if (Array.isArray(df)) {
+                    // 直接是陣列（可能是 records）
+                    const records = df;
+                    const colSet = new Set();
+                    records.forEach(r => {
+                        if (r && typeof r === 'object') {
+                            Object.keys(r).forEach(k => colSet.add(k));
+                        }
+                    });
+                    const columns = Array.from(colSet);
+                    const data = records.map(r => columns.map(c => (r && r[c] != null ? r[c] : '')));
+                    df = { columns, data };
+                } else if (df && Array.isArray(df.records)) {
+                    const records = df.records;
+                    const colSet = new Set();
+                    records.forEach(r => {
+                        if (r && typeof r === 'object') {
+                            Object.keys(r).forEach(k => colSet.add(k));
+                        }
+                    });
+                    const columns = Array.from(colSet);
+                    const data = records.map(r => columns.map(c => (r && r[c] != null ? r[c] : '')));
+                    df = { columns, data };
+                } else {
+                    console.error('Invalid DataFrame payload shape after parsing. Parsed DF:', df);
+                    throw new Error('解析後的 DataFrame 格式不正確，請檢查瀏覽器控制台以獲取詳細資訊。');
+                }
+            }
+
+            // 更新前端狀態並渲染表格
+            dfState.columns = df.columns;
+            dfState.data = df.data;
+            dfState.page = 1; // 每次收到新數據都重置到第一頁
+            
+            renderResultTablePaged(); // 使用分頁函式渲染
+            ensureDownloadButton();   // 在渲染表格後，確保下載按鈕存在
+            
+            if (resultContainer) {
                 resultContainer.style.display = 'block';
             }
+
+        } catch (e) {
+            // 這是關鍵的除錯步驟：打印出最原始的 content
+            console.error("前端處理 DataFrame 失敗！", {
+                errorMessage: e.message,
+                originalContent: content, // <--- 將原始數據打印出來
+                errorObject: e
+            });
+
+            if (resultContainer) {
+                resultContainer.innerHTML = `
+                    <p style="color: red; font-weight: bold;">無法解析或渲染查詢結果。</p>
+                    <p>這通常是前端問題。請打開瀏覽器開發者工具 (F12) 的 Console 查看詳細錯誤日誌。</p>
+                    <p>錯誤訊息: ${escapeHtml(String(e.message))}</p>`;
+                resultContainer.style.display = 'block';
+            }
+        }
+    } else if (type === 'thought') {
+        // 將 LLM 的思考過程顯示在分析區塊
+        try {
+            renderThinkingAnalysis(content);
+        } catch (e) {
+            console.warn('無法渲染思考過程，將以原始文字顯示。', e);
+            const analysisContainer = document.getElementById('analysis-container');
+            const analysisOutput = document.getElementById('analysis-output');
+            if (analysisContainer && analysisOutput) {
+                analysisOutput.textContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+                analysisContainer.style.display = 'block';
+            }
+        }
+    } else if (type === 'sql_error') {
+        const errorContainer = document.getElementById('sql-error-container');
+        const errorSqlOutput = document.getElementById('sql-error-output');
+        const errorDetailsOutput = document.getElementById('sql-error-details');
+        if (errorContainer && errorSqlOutput && errorDetailsOutput) {
+            errorSqlOutput.textContent = data.sql;
+            errorDetailsOutput.textContent = data.error;
+            errorContainer.style.display = 'block';
         }
     } else if (type === 'chart') {
         const chartContainer = document.getElementById('chart-container');
@@ -1114,18 +1223,38 @@ function handleStreamedData(data) {
         if (chartContainer && chartOutput) {
             if (content) {
                 try {
-                    const plotly_json = (new Function(`return ${content}`))();
-                    Plotly.newPlot(chartOutput, plotly_json.data, plotly_json.layout);
+                    let spec = null;
+                    if (typeof content === 'object' && content !== null) {
+                        spec = content;
+                    } else if (typeof content === 'string') {
+                        let s = content.trim();
+                        // 去除 Markdown 圍欄 ```json ... ``` 或 ``` ... ```
+                        s = s.replace(/^```[a-zA-Z]*\n([\s\S]*?)\n```$/m, '$1').trim();
+                        // 若包含前置變數賦值，如 plotly = {...} 或 data = {...}
+                        const firstBrace = s.indexOf('{');
+                        const lastBrace = s.lastIndexOf('}');
+                        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                            s = s.substring(firstBrace, lastBrace + 1);
+                        }
+                        // 僅嘗試安全的 JSON.parse，不再使用可執行字串
+                        spec = JSON.parse(s);
+                    }
+
+                    if (!spec || !Array.isArray(spec.data)) {
+                        throw new Error('圖表規格缺少 data 陣列，請確保後端傳回標準 Plotly JSON: {"data": [...], "layout": {...}}');
+                    }
+                    const layout = spec.layout || {};
+                    Plotly.newPlot(chartOutput, spec.data, layout);
                 } catch (e) {
-                    console.error("無法渲染 Plotly 圖表:", e);
-                    chartOutput.innerHTML = '<p><i>渲染圖表時發生錯誤。</i></p>';
+                    console.error('無法渲染 Plotly 圖表:', e, '原始內容:', content);
+                    chartOutput.innerHTML = `<p><i>渲染圖表時發生錯誤。</i></p><p>請確認後端輸出為標準 Plotly JSON 物件或 JSON 字串（不含任何 import/變數宣告/程式碼）。</p><pre style=\"white-space:pre-wrap\">${escapeHtml(String(e.message || e))}</pre>`;
                 }
             } else {
                 chartOutput.innerHTML = '<p><i>沒有可用的圖表數據。</i></p>';
             }
             chartContainer.style.display = 'block';
         }
-    } else if (type === 'explanation') {
+    } else if (type === 'analysis_result') { // Adding a new type for analysis results
         const analysisContainer = document.getElementById('analysis-container');
         const analysisOutput = document.getElementById('analysis-output');
         if (analysisContainer && analysisOutput && window.marked) {
@@ -1149,33 +1278,274 @@ function handleStreamedData(data) {
             });
             followupContainer.style.display = 'block';
         }
-    } else if (type === 'sql_error') {
-        const sqlContainer = document.getElementById('sql-container');
-        const sqlOutput = document.getElementById('sql-output');
-        if (sqlContainer && sqlOutput && data.sql) {
-            sqlOutput.textContent = data.sql;
-            sqlContainer.style.display = 'block';
-        }
-
-        const errorContainer = document.getElementById('sql-error-container');
-        const errorSqlOutput = document.getElementById('sql-error-output');
-        const errorDetailsOutput = document.getElementById('sql-error-details');
-        if (errorContainer && errorSqlOutput && errorDetailsOutput) {
-            errorSqlOutput.textContent = data.sql;
-            errorDetailsOutput.textContent = data.error;
-            errorContainer.style.display = 'block';
-        }
     } else if (type === 'error') {
         throw new Error(data.message);
+    } else if (type === 'complete') {
+        // 後端發送了結束信號，現在可以安全地更新 UI
+        const askBtn = document.getElementById('ask-button');
+        if (askBtn) {
+            askBtn.disabled = false;
+            askBtn.textContent = '提出問題';
+        }
+        const statusContainer = document.getElementById('ask-status-container');
+        if (statusContainer) {
+            statusContainer.textContent = '流程處理完成。';
+        }
+        const chartContainer = document.getElementById('chart-container');
+        if (chartContainer && chartContainer.style.display === 'none') {
+            const chartOutput = document.getElementById('chart-output');
+            if(chartOutput) {
+                chartOutput.innerHTML = '<p><i>沒有可用的圖表數據。</i></p>';
+            }
+            chartContainer.style.display = 'block';
+        }
     }
+}
+
+function ensureDownloadButton() {
+    const container = document.getElementById('result-container');
+    if (!container) return;
+    let btn = document.getElementById('download-csv-btn');
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'download-csv-btn';
+        btn.textContent = '下載 CSV';
+        btn.style.display = 'inline-block';
+        btn.style.marginBottom = '10px';
+        btn.style.marginTop = '10px';
+        btn.style.marginRight = '10px';
+        btn.style.backgroundColor = '#28a745';
+        btn.style.color = '#fff';
+        btn.style.padding = '8px 12px';
+        btn.style.borderRadius = '4px';
+        btn.style.border = 'none';
+        btn.style.cursor = 'pointer';
+        btn.onclick = downloadDataAsCsv; // 綁定新的下載函式
+
+        const title = container.querySelector('h3');
+        if (title && title.nextSibling) {
+            container.insertBefore(btn, title.nextSibling);
+        } else {
+            container.prepend(btn);
+        }
+    }
+}
+
+function downloadDataAsCsv() {
+    if (!dfState.data || dfState.data.length === 0) {
+        alert('沒有可下載的數據。');
+        return;
+    }
+
+    const { columns, data } = dfState;
+    
+    // 1. 將數據轉換為 CSV 格式的字串
+    const header = columns.join(',');
+    const rows = data.map(row =>
+        row.map(value => {
+            const strValue = String(value);
+            // 如果值包含逗號、引號或換行符，則用雙引號包起來
+            if (strValue.includes(',') || strValue.includes('"') || strValue.includes('\n')) {
+                return `"${strValue.replace(/"/g, '""')}"`;
+            }
+            return strValue;
+        }).join(',')
+    );
+    const csvContent = [header, ...rows].join('\n');
+
+    // 2. 創建 Blob 物件
+    const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
+
+    // 3. 創建並觸發下載連結
+    const link = document.createElement('a');
+    if (link.download !== undefined) { // Check for download attribute
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'query_result.csv');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+}
+
+function renderThinkingAnalysis(raw) {
+    const analysisContainer = document.getElementById('analysis-container');
+    const analysisOutput = document.getElementById('analysis-output');
+    if (!analysisContainer || !analysisOutput) return;
+
+    // 嘗試解析為 JSON，以支援結構化的思考結果
+    let text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+
+    // 常見格式轉換：
+    // 1) 若是 Markdown 表格或純文字，直接顯示
+    // 2) 若能擷取到步驟與內容，則渲染為條列或表格
+
+    // 嘗試用簡單的正則把可能的步驟或小節拆出來
+    const lines = text.split(/\r?\n/);
+    const items = [];
+    let current = null;
+    for (const line of lines) {
+        const stepMatch = line.match(/^\s*(?:Step\s*\d+|步驟\s*\d+|小結|分析|思考|理由|原因)[:：]?\s*(.*)$/i);
+        if (stepMatch) {
+            if (current) items.push(current);
+            current = { title: stepMatch[1] || line.trim(), details: [] };
+        } else if (/^\s*[-*•]/.test(line)) {
+            if (!current) current = { title: '思考過程', details: [] };
+            current.details.push(line.replace(/^\s*[-*•]\s*/, ''));
+        } else if (line.trim()) {
+            if (!current) current = { title: '思考過程', details: [] };
+            current.details.push(line.trim());
+        }
+    }
+    if (current) items.push(current);
+
+    // 清空並渲染
+    analysisOutput.innerHTML = '';
+    if (items.length === 0) {
+        analysisOutput.textContent = text;
+    } else {
+        const table = document.createElement('table');
+        const thead = table.createTHead();
+        const tbody = table.createTBody();
+        const header = thead.insertRow();
+        header.insertCell().textContent = '步驟/標題';
+        header.insertCell().textContent = '內容';
+
+        items.forEach(it => {
+            const row = tbody.insertRow();
+            const c1 = row.insertCell();
+            const c2 = row.insertCell();
+            c1.textContent = it.title || '—';
+            c2.innerHTML = (it.details && it.details.length)
+                ? `<ul>${it.details.map(d => `<li>${escapeHtml(d)}</li>`).join('')}</ul>`
+                : '—';
+        });
+        analysisOutput.appendChild(table);
+    }
+
+    analysisContainer.style.display = 'block';
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderResultTablePaged() {
+    const container = document.getElementById('result-output');
+    if (!container) return;
+    
+    // --- 侵入式除錯開始 ---
+    container.style.backgroundColor = 'yellow';
+    container.style.border = '2px solid orange';
+    container.innerHTML = '<p>Debug: renderResultTablePaged 函式已開始執行。</p>';
+    // --- 侵入式除錯結束 ---
+
+    container.innerHTML = '';
+
+    const total = dfState.data.length;
+    if (!total) {
+        container.innerHTML = '<p>（查詢返回了 0 筆資料）</p>';
+        return;
+    }
+
+    // 控制列數上限（只在表格中顯示前 N 筆）
+    const start = (dfState.page - 1) * dfState.pageSize;
+    const end = Math.min(start + dfState.pageSize, total);
+    const pageRows = dfState.data.slice(start, end);
+
+    // 建立表格
+    const table = document.createElement('table');
+    
+    // --- 侵入式除錯開始 ---
+    container.style.border = '3px solid red';
+    container.innerHTML += '<p>Debug: 表格元素已創建。</p>';
+    // --- 侵入式除錯結束 ---
+
+    const thead = table.createTHead();
+    const tbody = table.createTBody();
+
+    const headerRow = thead.insertRow();
+    dfState.columns.forEach(key => {
+        const th = document.createElement('th');
+        th.textContent = key;
+        headerRow.appendChild(th);
+    });
+
+    pageRows.forEach(rowData => {
+        const row = tbody.insertRow();
+        rowData.forEach(value => {
+            const cell = row.insertCell();
+            cell.textContent = value;
+        });
+    });
+
+    // 分頁控制
+    const pager = document.createElement('div');
+    pager.style.display = 'flex';
+    pager.style.alignItems = 'center';
+    pager.style.gap = '8px';
+    pager.style.marginTop = '10px';
+
+    const prevBtn = document.createElement('button');
+    prevBtn.textContent = '« 上一頁';
+    prevBtn.disabled = dfState.page <= 1;
+    prevBtn.onclick = () => { dfState.page = Math.max(1, dfState.page - 1); renderResultTablePaged(); };
+
+    const nextBtn = document.createElement('button');
+    nextBtn.textContent = '下一頁 »';
+    const totalPages = Math.max(1, Math.ceil(total / dfState.pageSize));
+    nextBtn.disabled = dfState.page >= totalPages;
+    nextBtn.onclick = () => { dfState.page = Math.min(totalPages, dfState.page + 1); renderResultTablePaged(); };
+
+    const pageInfo = document.createElement('span');
+    pageInfo.textContent = `第 ${dfState.page} / ${totalPages} 頁（共 ${total} 筆，單頁 ${dfState.pageSize} 筆）`;
+
+    // Page size selector
+    const sizeLabel = document.createElement('span');
+    sizeLabel.textContent = '每頁：';
+    const sizeSelect = document.createElement('select');
+    ;[20, 50, 100, 200].forEach(sz => {
+        const opt = document.createElement('option');
+        opt.value = String(sz);
+        opt.textContent = String(sz);
+        if (sz === dfState.pageSize) opt.selected = true;
+        sizeSelect.appendChild(opt);
+    });
+    sizeSelect.onchange = () => {
+        dfState.pageSize = parseInt(sizeSelect.value, 10) || DEFAULT_DF_PAGE_SIZE;
+        dfState.page = 1;
+        renderResultTablePaged();
+    };
+
+    pager.appendChild(prevBtn);
+    pager.appendChild(pageInfo);
+    pager.appendChild(nextBtn);
+    pager.appendChild(sizeLabel);
+    pager.appendChild(sizeSelect);
+
+    container.appendChild(table);
+    container.appendChild(pager);
+
+    // --- 侵入式除錯開始 ---
+    container.style.backgroundColor = 'lightgreen';
+    container.style.border = '2px solid green';
+    container.innerHTML += '<p>Debug: 函式已成功執行完畢。</p>';
+    // --- 侵入式除錯結束 ---
 }
 
 function renderResultTable(data, columns) {
     const container = document.getElementById('result-output');
     if (!container) return;
-    container.innerHTML = '';
+    container.innerHTML = ''; // Clear previous results
+
     if (!data || data.length === 0) {
-        container.textContent = '（查詢結果為空）';
+        container.innerHTML = '<p>（查詢返回了 0 筆資料）</p>';
         return;
     }
 
