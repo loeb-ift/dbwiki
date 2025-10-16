@@ -47,16 +47,28 @@ def handle_datasets():
                 conn.commit()
                 
                 # After adding, refetch all datasets to return the updated list
-                cursor.execute("SELECT id, dataset_name AS name, created_at FROM datasets ORDER BY created_at DESC")
-                columns = [desc[0] for desc in cursor.description]
-                all_datasets = [dict(zip(columns, row)) for row in cursor.fetchall()]
-                
+            cursor.execute("SELECT id, dataset_name AS name, created_at FROM datasets ORDER BY created_at DESC")
+            columns = [desc[0] for desc in cursor.description]
+            all_datasets = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+            # Configure Vanna for the newly created dataset
+            vn = get_vanna_instance(user_id)
+            if vn: # Ensure vanna instance exists
+                configure_vanna_for_request(vn, user_id, new_id)
+                # Add DDL for the newly created tables to Vanna
+                inspector = inspect(engine)
+                table_names = inspector.get_table_names()
+                with engine.connect() as connection:
+                    for name in table_names:
+                        ddl = connection.execute(text(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{name}';")).scalar()
+                        if ddl: vn.train(ddl=ddl)
+
             return jsonify({
                 'status': 'success',
                 'message': 'Dataset created successfully.',
                 'new_dataset': {'id': new_id, 'name': dataset_name},
                 'datasets': all_datasets
-            }), 201
+                }), 201
         except Exception as e:
             if os.path.exists(db_path): os.remove(db_path)
             return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -105,6 +117,15 @@ def handle_datasets():
             
             if os.path.exists(db_path):
                 os.remove(db_path)
+            
+            # After deleting a dataset, clean up its training data from Vanna
+            vn = get_vanna_instance(user_id)
+            if vn: # Ensure vanna instance exists
+                # Delete DDL, Documentation, and QA entries associated with this dataset
+                # Pass the dataset_id to remove_training_data to ensure only relevant data is deleted.
+                # If dataset_id is not passed, it might delete all training data, which is not desired.
+                vn.remove_training_data(dataset_id=dataset_id)
+
             
             return jsonify({'status': 'success', 'dataset_id': dataset_id})
         except Exception as e:
