@@ -21,3 +21,4 @@ vertexai
 
 # Utilities
 langchain-experimental # May be useful for graph integrations
+scipy
