@@ -230,10 +230,15 @@ def ask_question():
                             fig = local_vars.get('fig')
                             if fig and hasattr(fig, 'to_json'):
                                 plotly_spec = json.loads(fig.to_json())
+                                vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: Plotly fig.to_json() successful. Spec type: {type(plotly_spec)}"})
                             elif fig and hasattr(fig, 'to_dict'):
                                 plotly_spec = fig.to_dict()
+                                vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: Plotly fig.to_dict() successful. Spec type: {type(plotly_spec)}"})
+                            else:
+                                vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: Fig object not Plotly or no to_json/to_dict. Fig type: {type(fig)}"})
                         except Exception as exec_e:
                             logger.warning(f"執行 Plotly 圖表代碼失敗: {exec_e}")
+                            vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: Executing chart code failed: {exec_e}"})
                             # 如果执行失败，尝试作为纯 JSON 字符串解析
                             try:
                                 s = re.sub(r'^```[a-zA-Z]*\n([\s\S]*?)\n```$', r'\1', chart_code.strip(), flags=re.M)
@@ -242,18 +247,23 @@ def ask_question():
                                 if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
                                     s = s[first_brace:last_brace+1]
                                 plotly_spec = json.loads(s)
+                                vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: Fallback JSON parse successful. Spec type: {type(plotly_spec)}"})
                             except Exception as json_e:
                                 logger.warning(f"解析 Plotly JSON 字符串失敗: {json_e}")
+                                vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: Fallback JSON parse failed: {json_e}"})
                                 plotly_spec = None # 最终解析失败
                     else:
                         plotly_spec = None
+                        vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: chart_code is not dict or str. Type: {type(chart_code)}"})
                 except Exception as e:
                     logger.error(f"處理 Plotly 圖表代碼時發生未知錯誤: {e}")
+                    vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: Unknown error processing chart code: {e}"})
                     plotly_spec = None
                 
                 if plotly_spec and isinstance(plotly_spec, dict) and 'data' in plotly_spec:
                     vn_instance.log_queue.put({'type': 'chart', 'content': plotly_spec})
                 else:
+                    vn_instance.log_queue.put({'type': 'info', 'content': f"DEBUG: Final plotly_spec is invalid or None. Sending raw chart_code. Type: {type(chart_code)}"})
                     # 若解析失敗，仍回傳原始字串，交由前端顯示錯誤細節
                     vn_instance.log_queue.put({'type': 'chart', 'content': chart_code})
                 
