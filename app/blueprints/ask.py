@@ -24,22 +24,30 @@ ask_bp = Blueprint('ask', __name__, url_prefix='/api/ask')
 
 _last_result_cache = {}
 
-def generate_plotly_chart(fig):
+def create_chart_function(code_string: str):
     """
-    Serializes a Plotly figure to a JSON string using Plotly's built-in JSON encoder.
+    Dynamically creates a Python function from a string of code.
+    The generated function is expected to have the signature: create_chart(df, px, go)
     """
+    if not code_string:
+        return None, "No code provided"
+
+    # Wrap the user's code in a function definition
+    function_code = textwrap.dedent(f"""
+    def create_chart(df, px, go):
+    {textwrap.indent(code_string, '    ')}
+        return fig
+    """)
+    
     try:
-        if fig and hasattr(fig, 'to_dict'):
-            # Use Plotly's official encoder to handle ndarray, datetime, etc.
-            fig_json = json.dumps(fig, cls=PlotlyJSONEncoder)
-            return {"type": "plotly_chart", "content": fig_json}
-        else:
-            return {"type": "warning", "content": "Invalid Plotly figure object received."}
+        # Execute the function definition in a temporary namespace
+        namespace = {}
+        exec(function_code, namespace)
+        return namespace['create_chart'], None
+    except SyntaxError as e:
+        return None, f"Syntax error in generated code: {e}"
     except Exception as e:
-        return {
-            "type": "error",
-            "content": f"Chart serialization error: {str(e)}\nTraceback:\n{traceback.format_exc()}"
-        }
+        return None, f"An unexpected error occurred during function creation: {e}"
 
 def run_vanna_in_thread(vn_instance: MyVanna, question: str, session_data: dict, server_paginate: bool, page: int, page_size: int):
     """This function runs the Vanna logic in a separate thread."""
@@ -103,6 +111,12 @@ def run_vanna_in_thread(vn_instance: MyVanna, question: str, session_data: dict,
 
             df = pd.DataFrame()
             try:
+                # Dialect-specific SQL corrections
+                if vn.engine.dialect.name == 'sqlite':
+                    vn_instance.log_queue.put({'type': 'info', 'content': 'SQLite dialect detected. Applying date function corrections.'})
+                    sql = sql.replace("DATE_SUB(CURDATE(), INTERVAL 30 DAY)", "date('now', '-30 days')")
+                    sql = sql.replace("CURRENT_DATE - INTERVAL '30 days'", "date('now', '-30 days')")
+
                 df = vn.run_sql(sql=sql)
                 
                 # More careful data cleaning: convert non-numeric types to strings, leave numbers alone
@@ -141,22 +155,51 @@ def run_vanna_in_thread(vn_instance: MyVanna, question: str, session_data: dict,
             
             if not df.empty:
                 try:
+                    vn_instance.log_queue.put({'type': 'info', 'content': 'Attempting to generate Plotly code...'})
                     chart_code = vn_instance.generate_plotly_code(question=question, sql=sql, df=df)
+
                     if chart_code:
-                        vn_instance.log_queue.put({'type': 'info', 'content': f"Attempting to execute chart code:\n{chart_code}"})
-                        local_vars = {'df': df, 'px': px, 'go': go, 'fig': None}
-                        exec(chart_code, {}, local_vars)
-                        fig = local_vars.get('fig')
+                        # Final defensive fix: remove potential erroneous quotes around column names
+                        chart_code = chart_code.replace("['\"product_name\"']", "['product_name']").replace("['\"monthly_total\"']", "['monthly_total']")
+
+                        vn_instance.log_queue.put({'type': 'info', 'content': f"Vanna generated chart code (after defensive fix):\n{chart_code}"})
                         
-                        chart_result = generate_plotly_chart(fig)
-                        vn_instance.log_queue.put(chart_result)
+                        # Create the chart function dynamically
+                        create_chart, error = create_chart_function(chart_code)
+                        
+                        if error:
+                            vn_instance.log_queue.put({'type': 'error', 'content': f"Failed to create chart function: {error}"})
+                        else:
+                            vn_instance.log_queue.put({'type': 'info', 'content': 'Successfully created chart function. Executing...'})
+                            
+                            # Intercept and log DataFrame info
+                            buffer = io.StringIO()
+                            df.info(buf=buffer)
+                            df_info = buffer.getvalue()
+                            vn_instance.log_queue.put({'type': 'debug', 'content': f"DataFrame Info before chart generation:\n{df_info}\n{df.head().to_string()}"})
+
+                            # Execute the dynamically created function
+                            try:
+                                fig = create_chart(df, px, go)
+                                if fig:
+                                    vn_instance.log_queue.put({'type': 'info', 'content': 'Chart object created successfully. Serializing...'})
+                                    chart_json = json.dumps(fig, cls=PlotlyJSONEncoder)
+                                    vn_instance.log_queue.put({"type": "plotly_chart", "content": chart_json})
+                                    vn_instance.log_queue.put({'type': 'info', 'content': 'Chart serialization complete.'})
+                                else:
+                                    vn_instance.log_queue.put({'type': 'warning', 'content': 'Execution of chart function did NOT return a "fig" object.'})
+                            except Exception as e:
+                                vn_instance.log_queue.put({
+                                    'type': 'error',
+                                    'content': f'An exception occurred during chart function execution: {str(e)}\nTraceback: {traceback.format_exc()}'
+                                })
                     else:
                         vn_instance.log_queue.put({'type': 'info', 'content': 'Vanna did not generate any chart code.'})
 
                 except Exception as e:
                     vn_instance.log_queue.put({
                         'type': 'error',
-                        'content': f'An exception occurred during chart generation: {str(e)}\nCode:\n{chart_code}\nTraceback: {traceback.format_exc()}'
+                        'content': f'An exception occurred during the chart generation process: {str(e)}\nTraceback: {traceback.format_exc()}'
                     })
             
             followup_questions = vn.generate_followup_questions(question=question, sql=sql, df=df, user_id=user_id)
