@@ -70,6 +70,8 @@ def handle_datasets():
                 'datasets': all_datasets
                 }), 201
         except Exception as e:
+            if 'engine' in locals() and engine:
+                engine.dispose()
             if os.path.exists(db_path): os.remove(db_path)
             return jsonify({'status': 'error', 'message': str(e)}), 500
     
