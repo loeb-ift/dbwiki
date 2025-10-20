@@ -36,7 +36,7 @@ def handle_datasets():
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
             engine = create_engine(f'sqlite:///{db_path}')
             for file in files:
-                df = pd.read_csv(file.stream)
+                df = pd.read_csv(file.stream, encoding='utf-8-sig')
                 table_name = os.path.splitext(secure_filename(file.filename))[0].replace('-', '_').replace(' ', '_')
                 df.to_sql(table_name, engine, index=False, if_exists='replace')
             
@@ -225,7 +225,7 @@ def handle_dataset_files():
                 if not file.filename.endswith('.csv'):
                     continue
                 
-                df = pd.read_csv(file.stream)
+                df = pd.read_csv(file.stream, encoding='utf-8-sig')
                 table_name = os.path.splitext(secure_filename(file.filename))[0].replace('-', '_').replace(' ', '_')
                 with engine.connect() as connection:
                     connection.execute(text(f'DROP TABLE IF EXISTS "{table_name}"'))
